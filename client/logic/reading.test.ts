@@ -73,6 +73,16 @@ describe("pointer while reading", () => {
   });
 });
 
+describe("pointer for a file at PR head", () => {
+  test("follows the editor line while reading", () => {
+    let s = enqueueRead(createPlayer(), { kind: "read-file", reviewId: "r", path: "src/a.ts" }, { steps: [{ path: "src/a.ts", from: 1, to: 100 }] });
+    s = tick(s, 1500);
+    const target = pointerTarget(s);
+    expect(target?.kind).toBe("editor");
+    if (target?.kind === "editor") expect(target).toMatchObject({ path: "src/a.ts", column: 0 });
+  });
+});
+
 describe("memory", () => {
   test("finished commands drop their raw output", () => {
     const ev: ShellEvent = { ...base(), kind: "shell", command: "gh pr diff 1", output: "x", rawOutput: "x".repeat(1000), hiddenLines: 0, exitCode: 0 };

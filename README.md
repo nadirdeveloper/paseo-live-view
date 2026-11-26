@@ -30,6 +30,10 @@ Open it in Paseo with ⌘K → **Open Live View**, ideally in a split pane besid
 | `client/logic/pacing.ts`, `player.ts` | Catch-up player: slow motion when calm, stays within 15 s in bursts |
 | `client/*.tsx` | File tree, editor, terminal, controls, panel layout |
 | `server/files.ts` | File listing and safe reads |
+| `client/logic/highlight.ts`, `icons.ts`, `pointer.ts` | Syntax colours, file icons, where the mouse pointer goes |
+| `client/logic/review/*` | Review mode: `gh` command detection, diff parsing, merging partial reads, findings, review state |
+| `client/logic/thoughts.ts` | Thinking strip lane |
+| `client/DiffView.tsx`, `PrFiles.tsx`, `ReviewBar.tsx`, `ThinkingStrip.tsx`, `PointerLayer.tsx` | Review mode, thinking strip and pointer UI |
 
 ## Hidden tabs
 

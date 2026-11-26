@@ -2,6 +2,11 @@ import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Controls } from "./Controls";
+import { DiffView } from "./DiffView";
+import { PrFiles } from "./PrFiles";
+import { ReviewBar } from "./ReviewBar";
+import { placedFindings } from "./reviewModel";
+import { ThinkingStrip } from "./ThinkingStrip";
 import { EditorView, type ManualView } from "./EditorView";
 import { FileTree } from "./FileTree";
 import { pointerTarget } from "./logic/pointer";
@@ -9,7 +14,7 @@ import { PointerContext, PointerLayer, createRegister, type PointerRegistry } fr
 import { TerminalView } from "./TerminalView";
 import { AgentFollowers, useLiveFeed } from "./useLiveFeed";
 
-type Pane = "files" | "editor" | "terminal";
+type Pane = "files" | "editor" | "terminal" | "thinking";
 
 const READ_MESSAGES = {
   outside: "This file is outside the workspace.",
@@ -29,6 +34,23 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   const registry = useRef<PointerRegistry>(new Map()).current;
   const register = useMemo(() => createRegister(registry), [registry]);
   const target = useMemo(() => (follow ? pointerTarget(player) : null), [player, follow]);
+
+  // Review mode: the newest review, its findings, and which file is shown.
+  const { review: reviewState } = feed;
+  const inReview = reviewState.mode === "review";
+  const review = reviewState.reviews.find((r) => r.id === reviewState.activeId) ?? reviewState.reviews[reviewState.reviews.length - 1] ?? null;
+  const findings = useMemo(() => placedFindings(review), [review]);
+  const [prSelection, setPrSelection] = useState<string | null>(null);
+  const [showWorkspace, setShowWorkspace] = useState(false);
+  const reader = player.reader && review && player.reader.reviewId === review.id ? player.reader : null;
+  const prPath = follow && reader ? reader.path : prSelection ?? reader?.path ?? review?.files[0]?.path ?? null;
+  const selectPr = useCallback((path: string) => {
+    setFollow(false);
+    setPrSelection(path);
+    if (compactRef.current) setPane("editor");
+  }, []);
+  const headText = review && prPath ? review.headFiles.get(prPath) : undefined;
+  const readingHeadFile = reader?.mode === "file" && reader.path === prPath;
 
   // Read the latest values through refs so openFile keeps one identity and FileTree can skip renders.
   const doneRef = useRef(player.done);
@@ -62,7 +84,10 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
 
   const onFollow = (next: boolean) => {
     setFollow(next);
-    if (next) setManual(null);
+    if (next) {
+      setManual(null);
+      setPrSelection(null);
+    }
   };
 
   const activePath = follow ? player.editor?.filePath ?? null : manual?.path ?? null;
@@ -78,7 +103,49 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
       onSelect={openFile}
     />
   );
-  const editor = <EditorView theme={theme} compact={compact} frame={follow ? player.editor : null} manual={follow ? null : manual} />;
+  const codeEditor = <EditorView theme={theme} compact={compact} frame={follow ? player.editor : null} manual={follow ? null : manual} />;
+  // In review mode: a file fetched at PR head shows in the editor with the reading band; otherwise the diff.
+  const reviewMain =
+    review && prPath ? (
+      headText !== undefined && (readingHeadFile || !review.files.some((f) => f.path === prPath)) ? (
+        <EditorView
+          theme={theme}
+          compact={compact}
+          frame={{
+            filePath: prPath,
+            agentLabel: "reading at PR head",
+            text: headText,
+            cursor: null,
+            highlight: readingHeadFile && reader ? { startLine: reader.from, endLine: reader.cursorAt ?? reader.to } : null,
+            note: null,
+          }}
+          manual={null}
+        />
+      ) : (
+        <DiffView theme={theme} review={review} path={prPath} reader={reader} findings={findings} />
+      )
+    ) : null;
+  const editor = inReview && reviewMain ? reviewMain : codeEditor;
+  const left =
+    inReview && review ? (
+      <View style={{ flex: 1 }}>
+        <View style={{ flex: showWorkspace ? 1 : undefined, maxHeight: showWorkspace ? undefined : "85%" }}>
+          <PrFiles theme={theme} review={review} findings={findings} activePath={prPath} onSelect={selectPr} />
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => setShowWorkspace(!showWorkspace)}
+          style={{ paddingHorizontal: 10, paddingVertical: 6, borderTopWidth: 1, borderColor: theme.colors.border }}
+        >
+          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{showWorkspace ? "▾" : "▸"} WORKSPACE FILES</Text>
+        </Pressable>
+        {showWorkspace ? <View style={{ flex: 1 }}>{tree}</View> : null}
+      </View>
+    ) : (
+      tree
+    );
+  const bar = <ReviewBar theme={theme} mode={reviewState.mode} review={review} onMode={feed.setMode} />;
+  const thinking = <ThinkingStrip theme={theme} lane={feed.thoughts} />;
   const terminal = <TerminalView theme={theme} entries={player.terminal} />;
   const controls = (
     <Controls
@@ -117,12 +184,16 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
     return (
       <View style={{ flex: 1, backgroundColor: theme.colors.surface0 }}>
         <AgentFollowers feed={feed} />
+        {bar}
         <View style={{ flexDirection: "row", borderBottomWidth: 1, borderColor: theme.colors.border }}>
           {tab("files", "Files")}
-          {tab("editor", "Editor")}
+          {tab("editor", inReview ? "Diff" : "Editor")}
           {tab("terminal", `Terminal${player.terminal.length ? ` (${player.terminal.length})` : ""}`)}
+          {tab("thinking", "Thinking")}
         </View>
-        <View style={{ flex: 1 }}>{pane === "files" ? tree : pane === "editor" ? editor : terminal}</View>
+        <View style={{ flex: 1 }}>
+          {pane === "files" ? left : pane === "editor" ? editor : pane === "terminal" ? terminal : <ThinkingStrip theme={theme} lane={feed.thoughts} fill />}
+        </View>
         {controls}
       </View>
     );
@@ -132,12 +203,14 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
     <PointerContext.Provider value={register}>
     <View ref={rootRef} style={{ flex: 1, backgroundColor: theme.colors.surface0 }}>
       <AgentFollowers feed={feed} />
+      {bar}
       <View style={{ flex: 65, flexDirection: "row" }}>
-        <View style={{ width: 220, borderRightWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface1 }}>
-          {tree}
+        <View style={{ width: inReview ? 260 : 220, borderRightWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface1 }}>
+          {left}
         </View>
         <View style={{ flex: 1 }}>{editor}</View>
       </View>
+      {thinking}
       {controls}
       <View style={{ flex: 35 }}>{terminal}</View>
       <PointerLayer theme={theme} target={target} rootRef={rootRef} registry={registry} />

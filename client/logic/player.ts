@@ -513,8 +513,9 @@ export type PhaseInfo = {
   key: string;
   kind: "text" | "diff" | "shell" | "instant" | "read";
   filePath: string | null;
-  /** For reads: the review and the line being read. */
+  /** For reads: the review, diff or whole file, and the line being read. */
   reviewId: string | null;
+  readMode: "diff" | "file" | null;
   cursorAt: number | null;
   phase: Phase;
   /** 0..1 through the current phase. */
@@ -537,6 +538,7 @@ export function currentPhase(s: PlayerState): PhaseInfo | null {
           ? script.steps[Math.min(pb.step, script.steps.length - 1)].path
           : null,
     reviewId: script.kind === "read" ? script.reviewId : null,
+    readMode: script.kind === "read" ? script.mode : null,
     cursorAt: script.kind === "read" ? s.reader?.cursorAt ?? null : null,
     phase: pb.phase,
     fraction: total > 0 ? Math.min(1, pb.progress / total) : 1,

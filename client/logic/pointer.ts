@@ -26,6 +26,8 @@ export function pointerTarget(s: PlayerState): PointerTarget | null {
   if (!info) return null;
   if (info.kind === "read") {
     if (info.phase === "dwell") return { kind: "pr-file", reviewId: info.reviewId!, path: info.filePath!, click: info.fraction >= CLICK_AT };
+    // A whole file at PR head is shown in the editor; a diff in the diff view.
+    if (info.readMode === "file") return { kind: "editor", path: info.filePath!, line: info.cursorAt ?? 1, column: 0 };
     return { kind: "diff", line: info.cursorAt ?? 1 };
   }
   if (info.kind === "shell" || info.kind === "instant") return { kind: "terminal", key: info.key };

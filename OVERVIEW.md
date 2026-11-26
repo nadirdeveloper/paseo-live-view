@@ -6,9 +6,24 @@ Agents write each edit in one step, so Live View replays edits after they happen
 
 It follows every agent in the workspace and labels each change with the agent that made it. When you open the panel, recent activity appears straight away without animation; only new activity is replayed.
 
+## Review mode
+
+When an agent reviews a pull request (for example with a review skill that runs `gh pr diff`), Live View switches to Review mode on its own. A Code / Review switch at the top lets you flip back and forth; once you use it, automatic switching waits until the next review.
+
+- The PR's changed files are listed with their added and removed line counts and a bar showing how much of each file's diff the agent has read so far. When the diff is too long for one command and the agent reads the saved copy in parts, every part it reads is added.
+- The selected file's diff is shown in red and green, and a reading highlight and the pointer move through each newly read part.
+- Files the agent fetches whole at the PR's head commit open as "reading at PR head".
+- When the agent's final report lists findings by severity with `file:line`, each one is pinned under its line, files show coloured finding dots, and the verdict appears at the top.
+
+Review mode only shows what the agent itself saw. It makes no GitHub or Jira requests and does not open the agent's saved files.
+
+## Thinking strip
+
+A strip above the controls types out the agent's latest reasoning and messages as they arrive, keeping the last three. Whether reasoning appears depends on the agent sharing it.
+
 ## What it reads
 
-- The activity history of the agents in the current workspace (edits, file writes, shell commands, and sub-agent calls).
+- The activity history of the agents in the current workspace: edits, file writes, shell commands, file reads, reasoning, messages, and sub-agent calls.
 - Files inside the workspace folder, to show the file list and the file around each edit. It never reads files outside the workspace folder, and it skips binary files and files over 1 MiB.
 
 Live View is read-only. It does not change files, run commands, or send anything off your machine.
