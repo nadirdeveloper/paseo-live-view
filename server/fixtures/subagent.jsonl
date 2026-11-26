@@ -1,0 +1,17 @@
+{"type": "user", "isSidechain": true, "agentId": "x1", "message": {"role": "user", "content": "Explore the repo and fix the comment"}}
+{"type": "attachment", "agentId": "x1"}
+{"type": "api-request-blob", "agentId": "x1", "message": {"role": "user", "content": [{"type": "text", "text": "<system-reminder>skip me</system-reminder>"}]}}
+{"type": "assistant", "isSidechain": true, "agentId": "x1", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "thinking", "thinking": "I should look at script.js first.", "signature": "sig"}]}}
+{"type": "assistant", "isSidechain": true, "agentId": "x1", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "text", "text": "Let me read the file."}]}}
+{"type": "assistant", "isSidechain": true, "agentId": "x1", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_read", "name": "Read", "input": {"file_path": "/w/script.js", "offset": 1, "limit": 20}}]}}
+{"type": "user", "isSidechain": true, "agentId": "x1", "message": {"role": "user", "content": [{"tool_use_id": "toolu_read", "type": "tool_result", "content": "// MyApp\nfunction a() {}", "is_error": false}]}}
+{"type": "assistant", "isSidechain": true, "agentId": "x1", "message": {"id": "msg_2", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_edit", "name": "Edit", "input": {"file_path": "/w/script.js", "old_string": "// MyApp", "new_string": "// MyApp game", "replace_all": false}}]}}
+{"type": "user", "isSidechain": true, "agentId": "x1", "message": {"role": "user", "content": [{"tool_use_id": "toolu_edit", "type": "tool_result", "content": "The file /w/script.js has been updated successfully.", "is_error": false}]}}
+{"type": "assistant", "isSidechain": true, "agentId": "x1", "message": {"id": "msg_3", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_write", "name": "Write", "input": {"file_path": "/w/notes.md", "content": "# Notes\n"}}]}}
+{"type": "user", "isSidechain": true, "agentId": "x1", "message": {"role": "user", "content": [{"tool_use_id": "toolu_write", "type": "tool_result", "content": "File created successfully at: /w/notes.md", "is_error": false}]}}
+{"type": "assistant", "isSidechain": true, "agentId": "x1", "message": {"id": "msg_4", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_bash", "name": "Bash", "input": {"command": "node --test tests/*.test.js", "description": "Run tests"}}]}}
+{"type": "user", "isSidechain": true, "agentId": "x1", "message": {"role": "user", "content": [{"tool_use_id": "toolu_bash", "type": "tool_result", "content": [{"type": "text", "text": "# tests 7\n"}, {"type": "text", "text": "# pass 7"}], "is_error": false}]}}
+{"type": "assistant", "isSidechain": true, "agentId": "x1", "message": {"id": "msg_5", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_fail", "name": "Bash", "input": {"command": "false"}}]}}
+{"type": "user", "isSidechain": true, "agentId": "x1", "message": {"role": "user", "content": [{"tool_use_id": "toolu_fail", "type": "tool_result", "content": "Exit code 1", "is_error": true}]}}
+{"type": "assistant", "isSidechain": true, "agentId": "x1", "message": {"id": "msg_6", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_agent", "name": "Agent", "input": {"description": "Check styles", "subagent_type": "Explore", "prompt": "look at styles"}}]}}
+{"type": "api-request", "agentId": "x1"}
