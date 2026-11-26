@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { START, languageFor, stateAt, tokenizeLine, type LexState, type Token, type TokenKind } from "./logic/highlight";
 import type { EditorFrame } from "./logic/player";
 import { clipLine, visibleWindow } from "./logic/view";
 import { MONO, baseName, type Theme } from "./style";
@@ -10,6 +11,56 @@ const SHOW_MORE = 200;
 export type ManualView = { path: string; text: string | null; message: string | null };
 
 type Props = { theme: Theme; compact: boolean; frame: EditorFrame | null; manual: ManualView | null };
+
+function tokenColor(kind: TokenKind, theme: Theme): string {
+  switch (kind) {
+    case "keyword":
+      return theme.colors.statusDanger;
+    case "string":
+      return theme.colors.statusSuccess;
+    case "number":
+    case "attr":
+    case "property":
+      return theme.colors.statusWarning;
+    case "function":
+    case "type":
+    case "tag":
+      return theme.colors.accent;
+    case "comment":
+    case "punctuation":
+      return theme.colors.foregroundMuted;
+    default:
+      return theme.colors.foreground;
+  }
+}
+
+/** Coloured spans for one line, with the text cursor glyph inserted at `cursorColumn`. */
+function renderTokens(tokens: Token[], cursorColumn: number | null, theme: Theme) {
+  const spans = [];
+  let at = 0;
+  let key = 0;
+  const caret = <Text key="caret" style={{ color: theme.colors.accent }}>▍</Text>;
+  let caretPlaced = cursorColumn === null;
+  for (const token of tokens) {
+    const style = {
+      color: tokenColor(token.kind, theme),
+      fontStyle: token.kind === "comment" ? ("italic" as const) : ("normal" as const),
+    };
+    const end = at + token.text.length;
+    if (!caretPlaced && cursorColumn !== null && cursorColumn >= at && cursorColumn < end) {
+      const split = cursorColumn - at;
+      if (split > 0) spans.push(<Text key={key++} style={style}>{token.text.slice(0, split)}</Text>);
+      spans.push(caret);
+      spans.push(<Text key={key++} style={style}>{token.text.slice(split)}</Text>);
+      caretPlaced = true;
+    } else {
+      spans.push(<Text key={key++} style={style}>{token.text}</Text>);
+    }
+    at = end;
+  }
+  if (!caretPlaced) spans.push(caret);
+  return spans;
+}
 
 function lineOf(text: string, offset: number): number {
   let line = 1;
@@ -39,6 +90,17 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
     extraBelow: extra.below,
   });
 
+  // Colours: work out the lexer state entering the window once, and reuse it while the text above
+  // the window is unchanged (it is during typing, which happens inside the window).
+  const lang = path ? languageFor(path) : null;
+  const carryRef = useRef<{ key: string; state: LexState }>({ key: "", state: START });
+  let carryIn: LexState = START;
+  if (lang && first > 1) {
+    const key = `${path}\u0000${lang}\u0000${first}\u0000${lines.slice(0, first - 1).join("\n")}`;
+    if (carryRef.current.key !== key) carryRef.current = { key, state: stateAt(lines, lang, first - 1) };
+    carryIn = carryRef.current.state;
+  }
+
   // Keep the focus line in view as the cursor moves.
   useEffect(() => {
     const y = focus === null ? 0 : (focus - first) * LINE_HEIGHT - 4 * LINE_HEIGHT;
@@ -57,6 +119,7 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
 
   const gutterWidth = Math.max(3, String(last).length) * 8 + 12;
   const rows = [];
+  let lexState = carryIn;
   for (let n = first; n <= last; n++) {
     const lit = highlight !== null && n >= highlight.startLine && n <= highlight.endLine;
     const hasCursor = cursorLine === n;
@@ -64,6 +127,13 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
     const clipped = clipLine(lines[n - 1] ?? "", hasCursor ? cursorColumn : null);
     const content = clipped.text;
     const column = clipped.cursorColumn ?? 0;
+    let tokens: Token[] | null = null;
+    if (lang) {
+      const full = lines[n - 1] ?? "";
+      const lexed = tokenizeLine(content, lang, lexState);
+      tokens = lexed.tokens;
+      lexState = content === full ? lexed.state : tokenizeLine(full, lang, lexState).state;
+    }
     rows.push(
       <View key={n} style={{ flexDirection: "row", minHeight: LINE_HEIGHT }}>
         {lit ? (
@@ -86,15 +156,21 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
           {n}
         </Text>
         <Text style={{ flex: 1, color: theme.colors.foreground, fontFamily: MONO, fontSize: 12, lineHeight: LINE_HEIGHT }}>
-          {hasCursor ? (
-            <>
-              {content.slice(0, column)}
-              <Text style={{ color: theme.colors.accent }}>▍</Text>
-              {content.slice(column)}
-            </>
-          ) : (
-            content || " "
-          )}
+          {tokens
+            ? content
+              ? renderTokens(tokens, hasCursor ? column : null, theme)
+              : hasCursor
+                ? renderTokens([], 0, theme)
+                : " "
+            : hasCursor ? (
+              <>
+                {content.slice(0, column)}
+                <Text style={{ color: theme.colors.accent }}>▍</Text>
+                {content.slice(column)}
+              </>
+            ) : (
+              content || " "
+            )}
         </Text>
       </View>,
     );
