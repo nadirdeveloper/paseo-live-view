@@ -40,7 +40,26 @@ export function pointerTarget(s: PlayerState): PointerTarget | null {
     if (info.alreadyOpen) return { ...at, click: false };
     return { kind: "tree", path, click: info.fraction >= CLICK_AT };
   }
+  // Once the line is clicked the pointer stays put; only the text cursor moves while typing.
+  if (info.kind === "text" && info.editLine !== null) {
+    return { kind: "editor", path, line: info.editLine, column: info.editColumn ?? 0 };
+  }
   const editor = s.editor;
   if (editor && editor.cursor !== null) return { kind: "editor", path, ...cursorPosition(editor.text, editor.cursor) };
   return { kind: "editor", path, line: editor?.highlight?.startLine ?? 1, column: 0 };
+}
+
+/** The pane the agent is working in, for the green "active" outline. */
+export function activeArea(target: PointerTarget | null): "files" | "editor" | "terminal" | null {
+  if (!target) return null;
+  switch (target.kind) {
+    case "tree":
+    case "pr-file":
+      return "files";
+    case "editor":
+    case "diff":
+      return "editor";
+    case "terminal":
+      return "terminal";
+  }
 }

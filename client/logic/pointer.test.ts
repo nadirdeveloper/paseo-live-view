@@ -33,9 +33,9 @@ describe("pointerTarget", () => {
     expect(pointerTarget(s)).toEqual({ kind: "tree", path: "/w/f.js", click: true });
   });
 
-  test("while typing it sits on the cursor in the editor", () => {
+  test("while typing it stays where it clicked (end of the old text), not on the moving text cursor", () => {
     const s = until(enqueue(createPlayer(), edit("a\nNEW\nc", "OLD", "NEW")), (x) => x.editor?.text === "a\nN\nc");
-    expect(pointerTarget(s)).toEqual({ kind: "editor", path: "/w/f.js", line: 2, column: 1 });
+    expect(pointerTarget(s)).toEqual({ kind: "editor", path: "/w/f.js", line: 2, column: 3 });
   });
 
   test("a diff-only edit points at the first highlighted line", () => {

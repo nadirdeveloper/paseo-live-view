@@ -10,7 +10,7 @@ import { ThinkingStrip } from "./ThinkingStrip";
 import { EditorView, type ManualView } from "./EditorView";
 import { FileTree } from "./FileTree";
 import { currentPhase } from "./logic/player";
-import { pointerTarget } from "./logic/pointer";
+import { activeArea, pointerTarget } from "./logic/pointer";
 import { displayMode } from "./logic/review/mode";
 import { Splitter } from "./Splitter";
 import { PointerContext, PointerLayer, createRegister, type PointerRegistry } from "./PointerLayer";
@@ -37,6 +37,13 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   const registry = useRef<PointerRegistry>(new Map()).current;
   const register = useMemo(() => createRegister(registry), [registry]);
   const target = useMemo(() => (follow ? pointerTarget(player) : null), [player, follow]);
+  // The pane the agent is working in gets a green outline.
+  const area = activeArea(target);
+  const outline = (name: "files" | "editor" | "terminal") => ({
+    borderWidth: 2,
+    borderRadius: 4,
+    borderColor: area === name ? theme.colors.statusSuccess : "transparent",
+  });
 
   // Review mode: the newest review, its findings, and which file is shown.
   const { review: reviewState } = feed;
@@ -204,7 +211,12 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
           paddingVertical: 8,
           alignItems: "center",
           borderBottomWidth: 2,
-          borderColor: pane === id ? theme.colors.accent : "transparent",
+          borderColor:
+            (id === "files" && area === "files") || (id === "editor" && area === "editor") || (id === "terminal" && area === "terminal")
+              ? theme.colors.statusSuccess
+              : pane === id
+                ? theme.colors.accent
+                : "transparent",
         }}
       >
         <Text style={{ color: pane === id ? theme.colors.foreground : theme.colors.foregroundMuted, fontSize: 13 }}>{label}</Text>
@@ -234,15 +246,15 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
       <AgentFollowers feed={feed} />
       {bar}
       <View style={{ flex: 1, flexDirection: "row" }}>
-        <View style={{ width: treeWidth, backgroundColor: theme.colors.surface1 }}>{left}</View>
+        <View style={[{ width: treeWidth, backgroundColor: theme.colors.surface1 }, outline("files")]}>{left}</View>
         <Splitter theme={theme} direction="column" size={treeWidth} min={140} max={560} onResize={setTreeWidth} />
-        <View style={{ flex: 1 }}>{editor}</View>
+        <View style={[{ flex: 1 }, outline("editor")]}>{editor}</View>
       </View>
       <Splitter theme={theme} direction="row" size={thinkingHeight} min={40} max={320} sign={-1} onResize={setThinkingHeight} />
       {thinking}
       {controls}
       <Splitter theme={theme} direction="row" size={terminalHeight} min={80} max={640} sign={-1} onResize={setTerminalHeight} />
-      <View style={{ height: terminalHeight }}>{terminal}</View>
+      <View style={[{ height: terminalHeight }, outline("terminal")]}>{terminal}</View>
       <PointerLayer theme={theme} target={target} rootRef={rootRef} registry={registry} />
     </View>
     </PointerContext.Provider>
