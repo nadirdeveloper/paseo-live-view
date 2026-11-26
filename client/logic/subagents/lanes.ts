@@ -34,8 +34,13 @@ export function nameLanes(lanes: LaneInfo[]): LaneInfo[] {
  * Auto: the lane that most recently started something. Ties go to a working lane, then a main
  * agent, then the newest lane. A pin wins if it still exists.
  */
-export function pickLane(lanes: LaneInfo[], selection: "auto" | string): string | null {
-  if (selection !== "auto" && lanes.some((l) => l.id === selection)) return selection;
+export function pickLane(lanes: LaneInfo[], selection: "auto" | "main" | string): string | null {
+  if (selection !== "auto" && selection !== "main" && lanes.some((l) => l.id === selection)) return selection;
+  // "main": only main agents are candidates, so a busy subagent never takes over the view.
+  if (selection === "main" || (selection !== "auto" && lanes.length > 0)) {
+    const mains = lanes.filter((l) => l.parentId === null);
+    if (mains.length > 0) lanes = mains;
+  }
   const better = (a: LaneInfo, b: LaneInfo): boolean => {
     if (a.lastStartedAt !== b.lastStartedAt) return a.lastStartedAt > b.lastStartedAt;
     const working = (l: LaneInfo) => (l.status === "running" ? 1 : 0);
@@ -86,4 +91,28 @@ export function laneRole(lanes: LaneInfo[], id: string): { role: "Main agent" | 
   const parent = lanes.find((l) => l.id === lane.parentId);
   if (!parent || parent.kind === "agent") return { role: "Subagent", startedBy: "Main agent" };
   return { role: "Sub-subagent", startedBy: parent.label };
+}
+
+export type LaneNotice = { laneId: string; kind: "started" | "finished" | "failed"; label: string; task: string | null };
+
+/**
+ * What to tell the user about other agents without switching to them: subagents that started after
+ * the panel opened, and subagents that finished or failed. Never about the lane being watched.
+ */
+export function laneNotices(prev: LaneInfo[], next: LaneInfo[], watchingId: string | null, openedAt: number): LaneNotice[] {
+  const before = new Map(prev.map((l) => [l.id, l]));
+  const out: LaneNotice[] = [];
+  for (const lane of next) {
+    if (lane.kind !== "subagent" || lane.id === watchingId) continue;
+    const was = before.get(lane.id);
+    const notice = { laneId: lane.id, label: lane.label, task: lane.task };
+    if (!was) {
+      if (lane.createdAt > openedAt) out.push({ ...notice, kind: "started" });
+      continue;
+    }
+    if (was.status !== lane.status && (lane.status === "done" || lane.status === "failed")) {
+      out.push({ ...notice, kind: lane.status === "done" ? "finished" : "failed" });
+    }
+  }
+  return out;
 }

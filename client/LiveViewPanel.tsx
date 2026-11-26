@@ -4,6 +4,7 @@ import { Pressable, Text, View } from "react-native";
 import { AgentSwitcher } from "./AgentSwitcher";
 import { Controls } from "./Controls";
 import { FallbackLane } from "./FallbackLane";
+import { LaneNotices } from "./LaneNotices";
 import { SubagentFollowers } from "./SubagentFollower";
 import { DiffView } from "./DiffView";
 import { PrFiles } from "./PrFiles";
@@ -197,7 +198,10 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
       tree
     );
   const switcher = (
-    <AgentSwitcher theme={theme} lanes={feed.lanes} selection={feed.selection} selectedId={feed.selectedId} onSelect={feed.select} />
+    <>
+      <AgentSwitcher theme={theme} lanes={feed.lanes} selection={feed.selection} selectedId={feed.selectedId} onSelect={feed.select} />
+      <LaneNotices theme={theme} lanes={feed.lanes} watchingId={feed.selectedId} onWatch={feed.select} />
+    </>
   );
   const bar = (
     <>

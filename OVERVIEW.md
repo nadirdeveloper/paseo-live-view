@@ -23,7 +23,7 @@ A strip above the controls types out the agent's latest reasoning and messages a
 
 ## Subagents
 
-Each agent in the workspace, and each subagent it starts, gets its own replay. A switcher at the top lists them (subagents nested under the agent that started them, with a running, done, idle or failed dot); pick one to watch it, or choose Auto to follow whichever started something most recently. Every replay keeps going in the background, so switching shows exactly where that agent is.
+Each agent in the workspace, and each subagent it starts, gets its own replay. Live View watches the main agent and never switches by itself. When a subagent starts, finishes or fails, a notice appears with a Watch button. The "Watching" dropdown lists the main agent, its subagents and their subagents, each with its task and status, so you can switch at any time. Every replay keeps going in the background, so switching shows exactly where that agent is.
 
 For Claude Code subagents, Live View reads the subagent's own log, which Claude Code writes next to the parent session, and replays its edits, commands, reviews and thinking. It looks only in the project folder that matches the agent's working directory, inside `~/.claude`, `~/.claude-work` and `~/.claude-alt`, and only opens logs that match a subagent the agent actually started. If a log can't be found, the subagent appears with its type, task and status only.
 

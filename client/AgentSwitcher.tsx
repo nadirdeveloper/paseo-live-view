@@ -7,9 +7,9 @@ import type { Theme } from "./style";
 type Props = {
   theme: Theme;
   lanes: LaneInfo[];
-  selection: "auto" | string;
+  selection: "main" | string;
   selectedId: string | null;
-  onSelect(selection: "auto" | string): void;
+  onSelect(selection: "main" | string): void;
 };
 
 const STATUS_TEXT = { running: "working", done: "done", idle: "idle", failed: "failed" } as const;
@@ -31,9 +31,10 @@ export const AgentSwitcher = memo(function AgentSwitcher({ theme, lanes, selecti
     const { role } = laneRole(lanes, lane.id);
     return `${role} · ${lane.label}`;
   };
-  const current = selection === "auto" ? `Auto (now: ${shown ? describe(shown) : "nothing yet"})` : shown ? describe(shown) : "Auto";
+  const current = shown ? describe(shown) : "Main agent";
+  const working = lanes.filter((l) => l.kind === "subagent" && l.status === "running" && l.id !== selectedId).length;
 
-  const pick = (value: "auto" | string) => {
+  const pick = (value: "main" | string) => {
     onSelect(value);
     setOpen(false);
   };
@@ -65,6 +66,9 @@ export const AgentSwitcher = memo(function AgentSwitcher({ theme, lanes, selecti
         <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.foreground, fontSize: 12 }}>
           {current}
         </Text>
+        {working > 0 ? (
+          <Text style={{ color: theme.colors.accent, fontSize: 11 }}>● {working} subagent{working === 1 ? "" : "s"} working</Text>
+        ) : null}
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
           {lanes.length} agents {open ? "▴" : "▾"}
         </Text>
@@ -85,26 +89,10 @@ export const AgentSwitcher = memo(function AgentSwitcher({ theme, lanes, selecti
           }}
         >
           <ScrollView>
-            {row(
-              "auto",
-              selection === "auto",
-              () => pick("auto"),
-              <>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <Icon name="Radar" size={13} color={theme.colors.accent} />
-                  <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>Auto</Text>
-                  {selection === "auto" ? <Icon name="Check" size={13} color={theme.colors.accent} /> : null}
-                </View>
-                <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, paddingLeft: 19 }}>
-                  Follow whichever agent is working right now
-                </Text>
-              </>,
-              "Auto: follow whichever agent is working right now",
-            )}
             {lanes.map((lane) => {
               const { role, startedBy } = laneRole(lanes, lane.id);
               const depth = depthOf(lanes, lane.id);
-              const active = selection === lane.id;
+              const active = selectedId === lane.id;
               return row(
                 lane.id,
                 active,
@@ -119,10 +107,7 @@ export const AgentSwitcher = memo(function AgentSwitcher({ theme, lanes, selecti
                     </Text>
                     <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: statusColor(lane.status, theme) }} />
                     <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{STATUS_TEXT[lane.status]}</Text>
-                    {active ? <Icon name="Check" size={13} color={theme.colors.accent} /> : null}
-                    {selection === "auto" && selectedId === lane.id ? (
-                      <Text style={{ color: theme.colors.statusSuccess, fontSize: 11 }}>● showing</Text>
-                    ) : null}
+                    {active ? <Text style={{ color: theme.colors.statusSuccess, fontSize: 11 }}>● watching</Text> : null}
                   </View>
                   <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11, paddingLeft: depth > 0 ? 34 : 19 }}>
                     {[lane.task, startedBy ? `started by ${startedBy}` : null, lane.fallback ? "summary only" : null].filter(Boolean).join(" · ") || " "}

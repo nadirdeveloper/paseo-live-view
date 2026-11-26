@@ -65,9 +65,10 @@ export type LiveFeed = {
   setMode(mode: "code" | "review", lastStartedKey: string | null): void;
   /** Switcher: every lane in display order, the user's selection, and the lane on screen. */
   lanes: LaneInfo[];
-  selection: "auto" | string;
+  /** "main" (default): the main agent. Never switches to a subagent by itself. */
+  selection: "main" | string;
   selectedId: string | null;
-  select(selection: "auto" | string): void;
+  select(selection: "main" | string): void;
   /** Subagents to find and follow (one SubagentFollower each). */
   requests: SubagentRequest[];
   /** Used by AgentFollower. */
@@ -98,7 +99,7 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
-  const [selection, setSelection] = useState<"auto" | string>("auto");
+  const [selection, setSelection] = useState<"main" | string>("main");
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const [requests, setRequests] = useState<SubagentRequest[]>([]);
@@ -153,13 +154,15 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   );
 
   const ensureLane = useCallback(
-    (id: string, info: Omit<LaneInfo, "id" | "lastStartedAt" | "createdAt">, cwd: string) => {
+    (id: string, info: Omit<LaneInfo, "id" | "lastStartedAt" | "createdAt">, cwd: string, historical = false) => {
       const existing = lanesRef.current.get(id);
       if (existing) {
         if (existing.info.label !== info.label && info.kind === "agent") updateLane(id, (l) => ({ ...l, info: { ...l.info, label: info.label } }));
         return;
       }
-      lanesRef.current.set(id, newLane({ ...info, id, lastStartedAt: 0, createdAt: Date.now() + lanesRef.current.size / 1000 }, cwd, controlsRef.current));
+      // Lanes from history get small creation numbers (kept in order) so they're never announced as new.
+      const createdAt = historical ? lanesRef.current.size : Date.now() + lanesRef.current.size / 1000;
+      lanesRef.current.set(id, newLane({ ...info, id, lastStartedAt: 0, createdAt }, cwd, controlsRef.current));
       bump();
     },
     [bump, updateLane],
@@ -170,7 +173,7 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
     lanesRef.current = new Map();
     logRef.current = emptyLog;
     setRequests([]);
-    setSelection("auto");
+    setSelection("main");
     bump();
     notifyThoughts();
   }, [workspaceId]);
@@ -209,7 +212,7 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
         const ticked = tickThoughts(l.thoughts, TICK_MS);
         if (ticked !== l.thoughts) updateLane(laneId, (x) => ({ ...x, thoughts: ticked }), true);
       }
-      if (startedSomething && selectionRef.current === "auto") bump();
+      if (startedSomething && selectionRef.current === "main") bump();
     }, TICK_MS);
     return () => clearInterval(id);
   }, [updatePlayer, updateLane, bump]);
@@ -247,6 +250,7 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
         laneId,
         { parentId, label: ev.subAgentType ?? "Subagent", kind: "subagent", status: "running", fallback: false, task: ev.description },
         parent?.cwd ?? "",
+        mode === "history",
       );
       // Running/done normally comes from the transcript; the parent's card reports failures and
       // is the only status a lane without a transcript (fallback) has.
@@ -351,7 +355,7 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   const ingest = useCallback(
     (agent: AgentInfo, entries: TimelineEntry[], mode: "history" | "live") => {
       if (!workspaceDir) return;
-      ensureLane(agent.id, { parentId: null, label: agent.label, kind: "agent", status: "running", fallback: false, task: null }, agent.cwd);
+      ensureLane(agent.id, { parentId: null, label: agent.label, kind: "agent", status: "running", fallback: false, task: null }, agent.cwd, mode === "history");
       const events: LiveEvent[] = [];
       for (const entry of entries) {
         const ev = toLiveEvent(entry.item, {
