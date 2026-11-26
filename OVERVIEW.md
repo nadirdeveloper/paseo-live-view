@@ -1,29 +1,22 @@
-<!--
-OVERVIEW.md is required to list your plugin in the registry. Keep it beside
-paseo-plugin.json in your repository at the pinned commit and in your npm package.
-Replace this comment with useful facts before publishing.
+Live View is a workspace panel that lets you watch coding agents work, laid out like a small code editor. It shows the workspace's files, jumps to the file an agent is editing and replays the change in slow motion with a moving cursor, and lists every shell command the agents ran with its output and exit code.
 
-This overview is for people choosing a plugin in Paseo, on the plugin page under
-its install command. README assumes a GitHub audience and includes technical
-details, installation instructions, and badges. Long, AI-generated READMEs leave
-people reading past that material to understand what the plugin does.
+## How it works
 
-Write these parts in order, including only what helps someone decide to install:
+Agents write each edit in one step, so Live View replays edits after they happen rather than streaming keystrokes. While things are calm it types at a slow, readable speed. When several edits or commands arrive at once it speeds up so it stays within about 15 seconds of the agents. You can pause, choose 0.5×, 1× or 2× speed, or skip straight to the latest state.
 
-1. Describe what your plugin is and does in plain terms first.
-2. Explain how it works only when it is not obvious.
-3. Explain setup when needed: settings, accounts, tokens, providers, tools, or
-   other plugins. Include applicable daemon version and operating system
-   requirements. Setup guidance is allowed; installation instructions are not.
-4. Explain capabilities and settings worth understanding, what each option does,
-   what the plugin reads or sends and where, permissions, and known limits.
+It follows every agent in the workspace and labels each change with the agent that made it. When you open the panel, recent activity appears straight away without animation; only new activity is replayed.
 
-Length follows complexity; a theme needs one paragraph. Choose headings only
-when they help. Use sentence case and plain factual language, with no em dashes.
-Omit installation commands, badges, changelog, contributing or license sections,
-marketing, and unsupported claims. Avoid implementation filler such as empty
-cleanup functions, theme-token field lists, or lists of absent features.
+## What it reads
 
-To translate the overview, add a whole copy beside this file named for the
-language, such as OVERVIEW.zh-CN.md. Readers in that language see it instead.
--->
+- The activity history of the agents in the current workspace (edits, file writes, shell commands, and sub-agent calls).
+- Files inside the workspace folder, to show the file list and the file around each edit. It never reads files outside the workspace folder, and it skips binary files and files over 1 MiB.
+
+Live View is read-only. It does not change files, run commands, or send anything off your machine.
+
+## Limits
+
+- No syntax colouring.
+- Very long command output is trimmed to the last 200 lines.
+- Edits made inside Claude Code's own built-in sub-agents appear as a single line rather than a replay.
+- If a file changed again before an edit could be replayed, that edit is shown on its own with a note instead of in place.
+- Requires Paseo 0.17.4 or later.
