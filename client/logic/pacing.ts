@@ -10,7 +10,17 @@ export type Speed = 0.5 | 1 | 2;
  * remaining characters would not otherwise finish within `secondsLeft`.
  */
 export function effectiveCps(speed: Speed, remainingChars: number, secondsLeft = TARGET_LAG_SEC): number {
-  return Math.max(BASE_CPS * speed, remainingChars / Math.max(secondsLeft, 0.001));
+  return BASE_CPS * speed * catchUpFactor(speed, remainingChars, 0, secondsLeft);
+}
+
+/**
+ * How many times faster than normal everything (typing, pauses, output) must run so the remaining
+ * work — `remainingChars` typed at the chosen speed plus `fixedSec` of pauses and output reveal —
+ * fits in `secondsLeft`. Never below 1: calm moments stay in slow motion.
+ */
+export function catchUpFactor(speed: Speed, remainingChars: number, fixedSec: number, secondsLeft: number): number {
+  const needed = remainingChars / (BASE_CPS * speed) + fixedSec;
+  return Math.max(1, needed / Math.max(secondsLeft, 0.001));
 }
 
 function isFinalFailure(ev: LiveEvent): boolean {

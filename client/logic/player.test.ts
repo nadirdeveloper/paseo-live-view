@@ -82,6 +82,17 @@ describe("catch-up", () => {
     expect(timeToDrain(s)).toBeLessThanOrEqual(17000);
   });
 
+  test("a mixed burst of 70 commands with long output and 20 edits drains within 17 seconds", () => {
+    let s = createPlayer();
+    const output = Array.from({ length: 200 }, (_, i) => `line ${i}`).join("\n");
+    for (let i = 0; i < 70; i++) s = enqueue(s, shell(`command number ${i}`, output));
+    for (let i = 0; i < 20; i++) {
+      const text = "y".repeat(300);
+      s = enqueue(s, edit(`head\n${text}\ntail`, "x", text));
+    }
+    expect(timeToDrain(s, 50)).toBeLessThanOrEqual(17000);
+  });
+
   test("a single small edit plays in slow motion, not instantly", () => {
     const s = enqueue(createPlayer(), edit("a\nNEW TEXT HERE\nc", "OLD", "NEW TEXT HERE"));
     expect(timeToDrain(s)).toBeGreaterThan(300);

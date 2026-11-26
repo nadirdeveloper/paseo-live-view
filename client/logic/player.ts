@@ -1,5 +1,5 @@
 import type { LiveEvent, ShellEvent } from "./events";
-import { TARGET_LAG_SEC, effectiveCps, type Speed } from "./pacing";
+import { BASE_CPS, TARGET_LAG_SEC, catchUpFactor, type Speed } from "./pacing";
 import { reconstructEdit } from "./reconstruct";
 
 export type EditorFrame = {
@@ -290,14 +290,14 @@ function finish(s: PlayerState): PlayerState {
   return { ...rendered, current: null, done: [...s.done, pb.item.event] };
 }
 
-function totalForPhase(pb: Playback, busy: boolean): number {
+function totalForPhase(pb: Playback, busy: boolean, factor = 1): number {
   const ev = pb.item.event;
   const script = pb.script;
   switch (pb.phase) {
     case "dwell":
-      return busy ? BUSY_PAUSE_MS : DWELL_MS;
+      return (busy ? BUSY_PAUSE_MS : DWELL_MS) / factor;
     case "hold":
-      return busy ? BUSY_PAUSE_MS : HOLD_MS;
+      return (busy ? BUSY_PAUSE_MS : HOLD_MS) / factor;
     case "delete":
       return script.kind === "text" ? script.oldText.length : 0;
     case "type":
@@ -311,7 +311,7 @@ function totalForPhase(pb: Playback, busy: boolean): number {
 }
 
 /** Units per millisecond for the current phase. */
-function ratePerMs(pb: Playback, cps: number): number {
+function ratePerMs(pb: Playback, cps: number, factor: number): number {
   switch (pb.phase) {
     case "dwell":
     case "hold":
@@ -323,7 +323,7 @@ function ratePerMs(pb: Playback, cps: number): number {
     case "type":
       return cps / 1000;
     case "output":
-      return OUTPUT_LINES_PER_SEC / 1000;
+      return (OUTPUT_LINES_PER_SEC * factor) / 1000;
     default:
       return 1;
   }
@@ -341,45 +341,63 @@ function nextPhase(pb: Playback): Phase {
   return "done";
 }
 
-/** Remaining characters (typed + a quarter of deleted) across current and queue. */
+function outputMs(ev: LiveEvent): number {
+  return ev.kind === "shell" ? (lineCount(ev.output ?? "") / OUTPUT_LINES_PER_SEC) * 1000 : 0;
+}
+
+/**
+ * Work left across current and queue at normal speed: characters to type (deletions count a
+ * quarter) and milliseconds of pauses and output reveal.
+ */
 function remainingWork(s: PlayerState): { chars: number; fixedMs: number } {
   let chars = 0;
   let fixedMs = 0;
-  const count = (ev: LiveEvent) => {
+  for (const item of s.queue) {
+    const ev = item.event;
     const script = buildScript(ev);
     if (script.kind === "text") {
       chars += script.newText.length + script.oldText.length / 4;
       fixedMs += 2 * BUSY_PAUSE_MS;
     } else if (script.kind === "diff") {
       fixedMs += BUSY_PAUSE_MS;
-    } else if (script.kind === "shell" && ev.kind === "shell") {
-      chars += ev.command.length;
-      fixedMs += (lineCount(ev.output ?? "") / OUTPUT_LINES_PER_SEC) * 1000;
-    }
-  };
-  if (s.current) {
-    const pb = s.current;
-    const script = pb.script;
-    if (script.kind === "text") {
-      if (pb.phase === "dwell" || pb.phase === "delete") {
-        chars += script.newText.length + (script.oldText.length - (pb.phase === "delete" ? pb.progress : 0)) / 4;
-      } else if (pb.phase === "type") {
-        chars += script.newText.length - pb.progress;
-      }
-    } else if (script.kind === "shell" && pb.phase === "type") {
-      chars += totalForPhase(pb, true) - pb.progress;
+    } else if (script.kind === "shell") {
+      chars += ev.kind === "shell" ? ev.command.length : 0;
+      if (ev.status !== "running") fixedMs += outputMs(ev);
     }
   }
-  for (const item of s.queue) count(item.event);
+  const pb = s.current;
+  if (pb) {
+    const script = pb.script;
+    const ev = pb.item.event;
+    if (script.kind === "text") {
+      const oldLeft = script.oldText.length - (pb.phase === "delete" ? pb.progress : 0);
+      if (pb.phase === "dwell") chars += script.newText.length + script.oldText.length / 4;
+      if (pb.phase === "delete") chars += script.newText.length + oldLeft / 4;
+      if (pb.phase === "type") chars += script.newText.length - pb.progress;
+      if (pb.phase !== "hold") fixedMs += BUSY_PAUSE_MS;
+      fixedMs += BUSY_PAUSE_MS;
+    } else if (script.kind === "diff") {
+      fixedMs += BUSY_PAUSE_MS;
+    } else if (script.kind === "shell") {
+      if (pb.phase === "type") {
+        chars += totalForPhase(pb, true) - pb.progress;
+        if (ev.status !== "running") fixedMs += outputMs(ev);
+      } else if (pb.phase === "output") {
+        fixedMs += outputMs(ev) * (1 - pb.progress / Math.max(1, totalForPhase(pb, true)));
+      }
+    }
+  }
   return { chars, fixedMs };
 }
 
-function currentCps(s: PlayerState): number {
+/** Typing speed and the shared catch-up factor for this tick. */
+function currentPace(s: PlayerState): { cps: number; factor: number } {
   const oldest = s.current?.item.enqueuedAt ?? s.queue[0]?.enqueuedAt ?? s.clock;
   const ageSec = (s.clock - oldest) / 1000;
   const { chars, fixedMs } = remainingWork(s);
-  const secondsLeft = Math.max(0.1, TARGET_LAG_SEC - ageSec - fixedMs / 1000);
-  return effectiveCps(s.speed, chars, secondsLeft);
+  const secondsLeft = Math.max(0.1, TARGET_LAG_SEC - ageSec);
+  const factor = catchUpFactor(s.speed, chars, fixedMs / 1000, secondsLeft);
+  return { cps: BASE_CPS * s.speed * factor, factor };
 }
 
 // ---------- public API ----------
@@ -433,7 +451,7 @@ export function applyUpdate(s: PlayerState, ev: LiveEvent): PlayerState {
 export function tick(s: PlayerState, dtMs: number): PlayerState {
   if (s.paused || (!s.current && s.queue.length === 0)) return s.paused ? s : { ...s, clock: s.clock + dtMs };
   let state: PlayerState = { ...s, clock: s.clock + dtMs };
-  const cps = currentCps(state);
+  const { cps, factor } = currentPace(state);
   let left = dtMs;
   // Zero-length playbacks (instant ones) are consumed even when no time is left.
   for (let guard = 0; guard < 10000; guard++) {
@@ -448,8 +466,8 @@ export function tick(s: PlayerState, dtMs: number): PlayerState {
     }
     if (left <= 0) break;
     const busy = state.queue.length > 0;
-    const total = totalForPhase(pb, busy);
-    const rate = ratePerMs(pb, cps);
+    const total = totalForPhase(pb, busy, factor);
+    const rate = ratePerMs(pb, cps, factor);
     const needMs = (total - pb.progress) / rate;
     if (left >= needMs) {
       left -= needMs;
