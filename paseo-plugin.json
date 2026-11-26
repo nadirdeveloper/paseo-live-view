@@ -4,6 +4,7 @@
   "description": "Watch your Paseo agents work like a VS Code screen: live edits, commands, PR reviews and subagents, replayed in a side panel.",
   "media": [
     "assets/screenshots/01-edit-replay.png",
+    "assets/demo.mp4",
     "assets/screenshots/02-review-mode.png",
     "assets/screenshots/03-subagents.png"
   ],
