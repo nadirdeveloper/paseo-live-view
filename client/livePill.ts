@@ -24,7 +24,8 @@ export function addLivePills(client: PluginClientContext): () => void {
           behavior: {
             kind: "action",
             onPress() {
-              client.openPanel("live-view", { workspaceId });
+              // Paseo 0.17.4 has no "split" option; the Explorer side pane sits beside the chat.
+              client.openPanel("live-view", { workspaceId, location: "explorer" });
             },
           },
         },

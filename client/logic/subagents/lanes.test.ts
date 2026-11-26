@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { nameLanes, orderLanes, pickLane, type LaneInfo } from "./lanes";
+import { laneRole, nameLanes, orderLanes, pickLane, type LaneInfo } from "./lanes";
 
 const lane = (id: string, over: Partial<LaneInfo> = {}): LaneInfo => ({
   id, parentId: null, label: id, kind: "agent", status: "running", fallback: false, task: null, lastStartedAt: 0, createdAt: 0, ...over,
@@ -47,5 +47,19 @@ describe("orderLanes", () => {
       lane("a:2", { parentId: "a", createdAt: 4 }),
     ]);
     expect(ordered.map((l) => l.id)).toEqual(["a", "a:1", "a:1:x", "a:2", "b"]);
+  });
+});
+
+describe("laneRole", () => {
+  const lanes = [
+    lane("a", { label: "Fix the bug" }),
+    lane("a:1", { parentId: "a", kind: "subagent", label: "Explore #1", createdAt: 1 }),
+    lane("a:1:x", { parentId: "a:1", kind: "subagent", label: "Reviewer", createdAt: 2 }),
+  ];
+
+  test("names main agents, subagents and their subagents clearly", () => {
+    expect(laneRole(lanes, "a")).toEqual({ role: "Main agent", startedBy: null });
+    expect(laneRole(lanes, "a:1")).toEqual({ role: "Subagent", startedBy: "Main agent" });
+    expect(laneRole(lanes, "a:1:x")).toEqual({ role: "Sub-subagent", startedBy: "Explore #1" });
   });
 });

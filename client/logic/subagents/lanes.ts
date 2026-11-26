@@ -69,3 +69,12 @@ export function depthOf(lanes: LaneInfo[], id: string): number {
   }
   return depth;
 }
+
+/** Plain-words role for the dropdown: who this is and who started it. */
+export function laneRole(lanes: LaneInfo[], id: string): { role: "Main agent" | "Subagent" | "Sub-subagent"; startedBy: string | null } {
+  const lane = lanes.find((l) => l.id === id);
+  if (!lane || lane.kind === "agent" || !lane.parentId) return { role: "Main agent", startedBy: null };
+  const parent = lanes.find((l) => l.id === lane.parentId);
+  if (!parent || parent.kind === "agent") return { role: "Subagent", startedBy: "Main agent" };
+  return { role: "Sub-subagent", startedBy: parent.label };
+}

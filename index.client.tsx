@@ -8,6 +8,8 @@ export default function contribute(client: PluginClientContext) {
     title: "Live View",
     icon: "MonitorPlay",
     context: "workspace",
+    // A main-area tab, or the Explorer side pane beside the chat (used by the Live pill).
+    locations: ["workspace", "explorer"],
     Component: LiveViewPanel,
   });
   client.addCommandCenterItem({

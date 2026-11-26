@@ -1,7 +1,7 @@
 import { Icon } from "@getpaseo/plugin/client/ui";
-import { memo } from "react";
+import { memo, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { depthOf, type LaneInfo } from "./logic/subagents/lanes";
+import { depthOf, laneRole, type LaneInfo } from "./logic/subagents/lanes";
 import type { Theme } from "./style";
 
 type Props = {
@@ -12,6 +12,8 @@ type Props = {
   onSelect(selection: "auto" | string): void;
 };
 
+const STATUS_TEXT = { running: "working", done: "done", idle: "idle", failed: "failed" } as const;
+
 function statusColor(status: LaneInfo["status"], theme: Theme): string {
   if (status === "done") return theme.colors.statusSuccess;
   if (status === "failed") return theme.colors.statusDanger;
@@ -19,70 +21,119 @@ function statusColor(status: LaneInfo["status"], theme: Theme): string {
   return theme.colors.accent;
 }
 
-/** Auto + one chip per agent and subagent (nested), each with a status dot. */
+/** "Watching: …" dropdown to switch between the main agent, its subagents and theirs. */
 export const AgentSwitcher = memo(function AgentSwitcher({ theme, lanes, selection, selectedId, onSelect }: Props) {
+  const [open, setOpen] = useState(false);
   if (lanes.length <= 1) return null;
-  const chip = (key: string, active: boolean, showing: boolean, children: React.ReactNode, onPress: () => void, label: string) => (
+
+  const shown = lanes.find((l) => l.id === selectedId) ?? null;
+  const describe = (lane: LaneInfo) => {
+    const { role } = laneRole(lanes, lane.id);
+    return `${role} · ${lane.label}`;
+  };
+  const current = selection === "auto" ? `Auto (now: ${shown ? describe(shown) : "nothing yet"})` : shown ? describe(shown) : "Auto";
+
+  const pick = (value: "auto" | string) => {
+    onSelect(value);
+    setOpen(false);
+  };
+
+  const row = (key: string, active: boolean, onPress: () => void, children: React.ReactNode, label: string) => (
     <Pressable
       key={key}
-      accessibilityRole="button"
+      accessibilityRole="menuitem"
       accessibilityState={{ selected: active }}
       accessibilityLabel={label}
       onPress={onPress}
-      style={{
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 5,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 12,
-        borderWidth: showing ? 2 : 1,
-        borderColor: showing ? theme.colors.statusSuccess : active ? theme.colors.accent : theme.colors.border,
-        backgroundColor: active ? theme.colors.surface2 : "transparent",
-      }}
+      style={{ paddingHorizontal: 10, paddingVertical: 7, backgroundColor: active ? theme.colors.surface2 : "transparent", gap: 2 }}
     >
       {children}
     </Pressable>
   );
+
   return (
-    <View style={{ borderBottomWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface1 }}>
-      <ScrollView horizontal contentContainerStyle={{ gap: 6, paddingHorizontal: 10, paddingVertical: 5, alignItems: "center" }}>
-        {chip(
-          "auto",
-          selection === "auto",
-          false,
-          <>
-            <Icon name="Radar" size={12} color={theme.colors.foreground} />
-            <Text style={{ color: theme.colors.foreground, fontSize: 12 }}>Auto</Text>
-          </>,
-          () => onSelect("auto"),
-          "Follow whichever agent is active",
-        )}
-        {lanes.map((lane) => {
-          const depth = depthOf(lanes, lane.id);
-          return chip(
-            lane.id,
-            selection === lane.id,
-            // In Auto, outline the lane Auto is showing.
-            selection === "auto" && selectedId === lane.id,
-            <>
-              {depth > 0 ? <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{"↳".repeat(depth)}</Text> : null}
-              <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: statusColor(lane.status, theme) }} />
-              <Icon name={lane.kind === "agent" ? "Bot" : "GitBranch"} size={12} color={theme.colors.foregroundMuted} />
-              <Text numberOfLines={1} style={{ color: theme.colors.foreground, fontSize: 12, maxWidth: 160 }}>
-                {lane.label}
-              </Text>
-              {lane.task ? (
-                <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11, maxWidth: 160 }}>
-                  {lane.task}
+    // Sits above the panes so the open list can overlap them.
+    <View style={{ zIndex: 20, borderBottomWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface1 }}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Choose which agent to watch. Now: ${current}`}
+        onPress={() => setOpen(!open)}
+        style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingVertical: 6 }}
+      >
+        <Icon name="Users" size={13} color={theme.colors.foregroundMuted} />
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>Watching:</Text>
+        <Text numberOfLines={1} style={{ flex: 1, color: theme.colors.foreground, fontSize: 12 }}>
+          {current}
+        </Text>
+        <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>
+          {lanes.length} agents {open ? "▴" : "▾"}
+        </Text>
+      </Pressable>
+      {open ? (
+        <View
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 8,
+            right: 8,
+            maxHeight: 340,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: theme.colors.border,
+            backgroundColor: theme.colors.surface1,
+            overflow: "hidden",
+          }}
+        >
+          <ScrollView>
+            {row(
+              "auto",
+              selection === "auto",
+              () => pick("auto"),
+              <>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Icon name="Radar" size={13} color={theme.colors.accent} />
+                  <Text style={{ color: theme.colors.foreground, fontSize: 13 }}>Auto</Text>
+                  {selection === "auto" ? <Icon name="Check" size={13} color={theme.colors.accent} /> : null}
+                </View>
+                <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, paddingLeft: 19 }}>
+                  Follow whichever agent is working right now
                 </Text>
-              ) : null}
-            </>,
-            () => onSelect(lane.id),
-            `Show ${lane.label}${lane.task ? `: ${lane.task}` : ""}, ${lane.status}`,
-          );
-        })}
-      </ScrollView>
+              </>,
+              "Auto: follow whichever agent is working right now",
+            )}
+            {lanes.map((lane) => {
+              const { role, startedBy } = laneRole(lanes, lane.id);
+              const depth = depthOf(lanes, lane.id);
+              const active = selection === lane.id;
+              return row(
+                lane.id,
+                active,
+                () => pick(lane.id),
+                <View style={{ paddingLeft: depth * 18, gap: 2 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    {depth > 0 ? <Text style={{ color: theme.colors.foregroundMuted, fontSize: 12 }}>↳</Text> : null}
+                    <Icon name={lane.kind === "agent" ? "Bot" : "GitBranch"} size={13} color={theme.colors.foregroundMuted} />
+                    <Text style={{ color: theme.colors.accent, fontSize: 10, letterSpacing: 0.5 }}>{role.toUpperCase()}</Text>
+                    <Text numberOfLines={1} style={{ flexShrink: 1, color: theme.colors.foreground, fontSize: 13 }}>
+                      {lane.label}
+                    </Text>
+                    <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: statusColor(lane.status, theme) }} />
+                    <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11 }}>{STATUS_TEXT[lane.status]}</Text>
+                    {active ? <Icon name="Check" size={13} color={theme.colors.accent} /> : null}
+                    {selection === "auto" && selectedId === lane.id ? (
+                      <Text style={{ color: theme.colors.statusSuccess, fontSize: 11 }}>● showing</Text>
+                    ) : null}
+                  </View>
+                  <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 11, paddingLeft: depth > 0 ? 34 : 19 }}>
+                    {[lane.task, startedBy ? `started by ${startedBy}` : null, lane.fallback ? "summary only" : null].filter(Boolean).join(" · ") || " "}
+                  </Text>
+                </View>,
+                `${role} ${lane.label}${lane.task ? `: ${lane.task}` : ""}, ${STATUS_TEXT[lane.status]}${startedBy ? `, started by ${startedBy}` : ""}`,
+              );
+            })}
+          </ScrollView>
+        </View>
+      ) : null}
     </View>
   );
 });
