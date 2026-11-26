@@ -1,7 +1,10 @@
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
+import { AgentSwitcher } from "./AgentSwitcher";
 import { Controls } from "./Controls";
+import { FallbackLane } from "./FallbackLane";
+import { SubagentFollowers } from "./SubagentFollower";
 import { DiffView } from "./DiffView";
 import { PrFiles } from "./PrFiles";
 import { ReviewBar } from "./ReviewBar";
@@ -161,7 +164,7 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
         />
       )
     ) : null;
-  const editor = inReview && reviewMain ? reviewMain : codeEditor;
+  const editorBody = inReview && reviewMain ? reviewMain : codeEditor;
   const left =
     inReview && review ? (
       <View style={{ flex: 1 }}>
@@ -180,8 +183,20 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
     ) : (
       tree
     );
-  const bar = <ReviewBar theme={theme} mode={mode} review={review} onMode={(m) => feed.setMode(m, lastStartedKey.current)} />;
+  const switcher = (
+    <AgentSwitcher theme={theme} lanes={feed.lanes} selection={feed.selection} selectedId={feed.selectedId} onSelect={feed.select} />
+  );
+  const bar = (
+    <>
+      {switcher}
+      <ReviewBar theme={theme} mode={mode} review={review} onMode={(m) => feed.setMode(m, lastStartedKey.current)} />
+    </>
+  );
+  // A subagent without a readable transcript shows a simple card instead of the editor/diff.
+  const selectedLane = feed.lanes.find((l) => l.id === feed.selectedId);
+  const fallback = selectedLane?.fallback ? <FallbackLane theme={theme} lane={selectedLane} /> : null;
   const thinking = <ThinkingStrip theme={theme} store={feed.thoughts} height={thinkingHeight} />;
+  const editor = fallback ?? editorBody;
   const terminal = <TerminalView theme={theme} entries={player.terminal} />;
   const controls = (
     <Controls
@@ -225,6 +240,7 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
     return (
       <View style={{ flex: 1, backgroundColor: theme.colors.surface0 }}>
         <AgentFollowers feed={feed} />
+      <SubagentFollowers feed={feed} workspaceDir={feed.files.root} />
         {bar}
         <View style={{ flexDirection: "row", borderBottomWidth: 1, borderColor: theme.colors.border }}>
           {tab("files", "Files")}
@@ -244,6 +260,7 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
     <PointerContext.Provider value={register}>
     <View ref={rootRef} style={{ flex: 1, backgroundColor: theme.colors.surface0 }}>
       <AgentFollowers feed={feed} />
+      <SubagentFollowers feed={feed} workspaceDir={feed.files.root} />
       {bar}
       <View style={{ flex: 1, flexDirection: "row" }}>
         <View style={[{ width: treeWidth, backgroundColor: theme.colors.surface1 }, outline("files")]}>{left}</View>

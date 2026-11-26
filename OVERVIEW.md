@@ -21,9 +21,16 @@ Review mode only shows what the agent itself saw. It makes no GitHub or Jira req
 
 A strip above the controls types out the agent's latest reasoning and messages as they arrive, keeping the last three. Whether reasoning appears depends on the agent sharing it.
 
+## Subagents
+
+Each agent in the workspace, and each subagent it starts, gets its own replay. A switcher at the top lists them (subagents nested under the agent that started them, with a running, done, idle or failed dot); pick one to watch it, or choose Auto to follow whichever started something most recently. Every replay keeps going in the background, so switching shows exactly where that agent is.
+
+For Claude Code subagents, Live View reads the subagent's own log, which Claude Code writes next to the parent session, and replays its edits, commands, reviews and thinking. It looks only in the project folder that matches the agent's working directory, inside `~/.claude`, `~/.claude-work` and `~/.claude-alt`, and only opens logs that match a subagent the agent actually started. If a log can't be found, the subagent appears with its type, task and status only.
+
 ## What it reads
 
 - The activity history of the agents in the current workspace: edits, file writes, shell commands, file reads, reasoning, messages, and sub-agent calls.
+- Claude Code subagent logs and their info files, as described above (read-only).
 - Files inside the workspace folder, to show the file list and the file around each edit. It never reads files outside the workspace folder, and it skips binary files and files over 1 MiB.
 
 Live View is read-only. It does not change files, run commands, or send anything off your machine.

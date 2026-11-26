@@ -33,6 +33,8 @@ Open it in Paseo with ⌘K → **Open Live View**, ideally in a split pane besid
 | `client/logic/highlight.ts`, `icons.ts`, `pointer.ts` | Syntax colours, file icons, where the mouse pointer goes |
 | `client/logic/review/*` | Review mode: `gh` command detection, diff parsing, merging partial reads, findings, review state |
 | `client/logic/thoughts.ts` | Thinking strip lane |
+| `server/transcript.ts`, `server/subagents.ts` | Claude Code subagent logs: normalize lines, locate by call id (cwd project folder in three config dirs), tail with status |
+| `client/logic/subagents/*`, `client/SubagentFollower.tsx`, `client/AgentSwitcher.tsx`, `client/FallbackLane.tsx` | One replay per agent/subagent, Auto selection, switcher, fallback card |
 | `client/DiffView.tsx`, `PrFiles.tsx`, `ReviewBar.tsx`, `ThinkingStrip.tsx`, `PointerLayer.tsx` | Review mode, thinking strip and pointer UI |
 
 ## Hidden tabs
