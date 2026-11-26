@@ -6,6 +6,7 @@ import { emptyLog, forLog, toLiveEvent, upsertEvent, type EventLog, type LiveEve
 import { buildTree, type TreeNode } from "./logic/fileTree";
 import type { Speed } from "./logic/pacing";
 import { applyToReview, emptyReview, setMode as setReviewMode, type ReviewEffect, type ReviewState } from "./logic/review/state";
+import { nameLanes, orderLanes, pickLane, type LaneInfo } from "./logic/subagents/lanes";
 import { addThought, emptyLane, interrupt, tickThoughts, type ThoughtLane } from "./logic/thoughts";
 import {
   applyUpdate,
@@ -30,8 +31,24 @@ const HISTORY_LIMIT = 200;
 
 export type AgentInfo = { id: string; label: string; cwd: string };
 export type TimelineEntry = { item: AgentTimelineItem; timestamp?: string; seq?: number };
+/** A subagent whose transcript a SubagentFollower should find and follow. */
+export type SubagentRequest = { laneId: string; toolUseId: string; cwd: string; historical: boolean };
+
+/** One replay: each Paseo agent and each subagent has its own. */
+type Lane = {
+  info: LaneInfo;
+  player: PlayerState;
+  review: ReviewState;
+  thoughts: ThoughtLane;
+  /** Keys handed to this lane's player (queued, playing or finished). */
+  seen: Set<string>;
+  /** Thoughts already shown, by key + text. */
+  seenThoughts: Set<string>;
+  cwd: string;
+};
 
 export type LiveFeed = {
+  /** The selected lane's replay. */
   player: PlayerState;
   files: { tree: TreeNode[]; capped: boolean; root: string | null };
   agents: readonly AgentRef[];
@@ -46,12 +63,27 @@ export type LiveFeed = {
   thoughts: ThoughtStore;
   /** `lastStartedKey`: the playback that had last started, so the pick lasts until a new one starts. */
   setMode(mode: "code" | "review", lastStartedKey: string | null): void;
+  /** Switcher: every lane in display order, the user's selection, and the lane on screen. */
+  lanes: LaneInfo[];
+  selection: "auto" | string;
+  selectedId: string | null;
+  select(selection: "auto" | string): void;
+  /** Subagents to find and follow (one SubagentFollower each). */
+  requests: SubagentRequest[];
   /** Used by AgentFollower. */
   ingest(agent: AgentInfo, entries: TimelineEntry[], mode: "history" | "live"): void;
+  /** Used by SubagentFollower. */
+  ingestLane(laneId: string, events: LiveEvent[], mode: "history" | "live"): void;
+  setLaneStatus(laneId: string, status: LaneInfo["status"]): void;
+  markFallback(laneId: string): void;
   resetAgent(agentId: string): void;
 };
 
 export type ThoughtStore = { get(): ThoughtLane; subscribe(listener: () => void): () => void };
+
+function newLane(info: LaneInfo, cwd: string): Lane {
+  return { info, player: createPlayer(), review: emptyReview, thoughts: emptyLane, seen: new Set(), seenThoughts: new Set(), cwd };
+}
 
 export function useLiveFeed(workspaceId: string): LiveFeed {
   const workspaceDir = useWorkspace(workspaceId, (w) => w.directory);
@@ -59,61 +91,83 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   const listFiles = useRpc(filesListRpc);
   const readRpc = useRpc(filesReadRpc);
 
-  const playerRef = useRef<PlayerState>(createPlayer());
+  const lanesRef = useRef(new Map<string, Lane>());
   const logRef = useRef<EventLog>(emptyLog);
   const chainRef = useRef<Promise<void>>(Promise.resolve());
-  const [player, setPlayer] = useState<PlayerState>(playerRef.current);
+  const [version, setVersion] = useState(0);
+  const bump = useCallback(() => setVersion((v) => v + 1), []);
+  const [selection, setSelection] = useState<"auto" | string>("auto");
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const [requests, setRequests] = useState<SubagentRequest[]>([]);
   const [files, setFiles] = useState<LiveFeed["files"]>({ tree: [], capped: false, root: null });
   const [filesVersion, setFilesVersion] = useState(0);
   const knownPaths = useRef<Set<string>>(new Set());
-  /** Keys of every event handed to the player (queued, playing or finished). */
-  const seenRef = useRef<Set<string>>(new Set());
-  const reviewRef = useRef<ReviewState>(emptyReview);
-  const [review, setReview] = useState<ReviewState>(emptyReview);
-  const laneRef = useRef<ThoughtLane>(emptyLane);
-  const laneListeners = useRef(new Set<() => void>()).current;
+
+  const infos = () => [...lanesRef.current.values()].map((l) => l.info);
+  const selectedIdRef = useRef<string | null>(null);
+  const currentSelected = () => pickLane(infos(), selectionRef.current);
+
+  const thoughtListeners = useRef(new Set<() => void>()).current;
+  const notifyThoughts = useCallback(() => {
+    for (const listener of thoughtListeners) listener();
+  }, [thoughtListeners]);
   const thoughts = useMemo<ThoughtStore>(
     () => ({
-      get: () => laneRef.current,
+      get: () => lanesRef.current.get(selectedIdRef.current ?? "")?.thoughts ?? emptyLane,
       subscribe: (listener) => {
-        laneListeners.add(listener);
-        return () => laneListeners.delete(listener);
+        thoughtListeners.add(listener);
+        return () => thoughtListeners.delete(listener);
       },
     }),
-    [laneListeners],
+    [thoughtListeners],
   );
-  /** Thoughts already shown, by key + text (they stay out of the event log). */
-  const seenThoughts = useRef(new Set<string>());
 
-  const updateReview = useCallback((next: ReviewState) => {
-    if (next === reviewRef.current) return;
-    reviewRef.current = next;
-    setReview(next);
-  }, []);
-  const updateLane = useCallback((next: ThoughtLane) => {
-    if (next === laneRef.current) return;
-    laneRef.current = next;
-    for (const listener of laneListeners) listener();
-  }, [laneListeners]);
+  /** Change one lane. Re-renders when the lane on screen visibly changes (ticks) or always (other updates). */
+  const updateLane = useCallback(
+    (laneId: string, change: (l: Lane) => Lane, fromTick = false) => {
+      const previous = lanesRef.current.get(laneId);
+      if (!previous) return;
+      const next = change(previous);
+      if (next === previous) return;
+      lanesRef.current.set(laneId, next);
+      const onScreen = currentSelected() === laneId;
+      if (next.thoughts !== previous.thoughts && onScreen) notifyThoughts();
+      const playerChanged = next.player !== previous.player && (!fromTick || visibleChanged(previous.player, next.player));
+      if ((onScreen && (playerChanged || next.review !== previous.review)) || next.info !== previous.info) bump();
+    },
+    [bump, notifyThoughts],
+  );
+  const updatePlayer = useCallback(
+    (laneId: string, change: (s: PlayerState) => PlayerState, fromTick = false) =>
+      updateLane(laneId, (l) => {
+        const player = change(l.player);
+        return player === l.player ? l : { ...l, player };
+      }, fromTick),
+    [updateLane],
+  );
 
-  /** Ticks only re-render when something on screen changes; other updates always do. */
-  const update = useCallback((change: (s: PlayerState) => PlayerState, fromTick = false) => {
-    const previous = playerRef.current;
-    const next = change(previous);
-    if (next === previous) return;
-    playerRef.current = next;
-    if (!fromTick || visibleChanged(previous, next)) setPlayer(next);
-  }, []);
+  const ensureLane = useCallback(
+    (id: string, info: Omit<LaneInfo, "id" | "lastStartedAt" | "createdAt">, cwd: string) => {
+      const existing = lanesRef.current.get(id);
+      if (existing) {
+        if (existing.info.label !== info.label && info.kind === "agent") updateLane(id, (l) => ({ ...l, info: { ...l.info, label: info.label } }));
+        return;
+      }
+      lanesRef.current.set(id, newLane({ ...info, id, lastStartedAt: 0, createdAt: Date.now() + lanesRef.current.size / 1000 }, cwd));
+      bump();
+    },
+    [bump, updateLane],
+  );
 
   // A fresh workspace starts from a clean slate.
   useEffect(() => {
-    playerRef.current = createPlayer();
+    lanesRef.current = new Map();
     logRef.current = emptyLog;
-    seenRef.current = new Set();
-    seenThoughts.current = new Set();
-    setPlayer(playerRef.current);
-    updateReview(emptyReview);
-    updateLane(emptyLane);
+    setRequests([]);
+    setSelection("auto");
+    bump();
+    notifyThoughts();
   }, [workspaceId]);
 
   useEffect(() => {
@@ -130,23 +184,37 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
     };
   }, [workspaceId, filesVersion, listFiles]);
 
+  // One timer for every lane. A lane that starts something new may become the Auto choice.
   useEffect(() => {
     const id = setInterval(() => {
-      const s = playerRef.current;
-      if (!s.paused && (s.current || s.queue.length > 0)) update((p) => tick(p, TICK_MS), true);
-      updateLane(tickThoughts(laneRef.current, TICK_MS));
+      let startedSomething = false;
+      for (const [laneId, lane] of lanesRef.current) {
+        const s = lane.player;
+        if (!s.paused && (s.current || s.queue.length > 0)) {
+          const before = s.current?.item.event.key ?? null;
+          updatePlayer(laneId, (p) => tick(p, TICK_MS), true);
+          const after = lanesRef.current.get(laneId)?.player.current?.item.event.key ?? null;
+          if (after && after !== before) {
+            const l = lanesRef.current.get(laneId)!;
+            lanesRef.current.set(laneId, { ...l, info: { ...l.info, lastStartedAt: Date.now() } });
+            startedSomething = true;
+          }
+        }
+        const l = lanesRef.current.get(laneId)!;
+        const ticked = tickThoughts(l.thoughts, TICK_MS);
+        if (ticked !== l.thoughts) updateLane(laneId, (x) => ({ ...x, thoughts: ticked }), true);
+      }
+      if (startedSomething && selectionRef.current === "auto") bump();
     }, TICK_MS);
     return () => clearInterval(id);
-  }, [update, updateLane]);
+  }, [updatePlayer, updateLane, bump]);
 
   const readFile = useCallback((path: string) => readRpc({ workspaceId, path }), [readRpc, workspaceId]);
   const refreshFiles = useCallback(() => setFilesVersion((v) => v + 1), []);
 
-  const inPlayer = useCallback((key: string) => seenRef.current.has(key), []);
-
   /** One reading step per PR file the new diff lines touch (or the whole file at PR head). */
-  const planFor = useCallback((effect: Extract<ReviewEffect, { kind: "read-diff" | "read-file" }>): ReadPlan => {
-    const target = reviewRef.current.reviews.find((r) => r.id === effect.reviewId);
+  const planFor = useCallback((review: ReviewState, effect: Extract<ReviewEffect, { kind: "read-diff" | "read-file" }>): ReadPlan => {
+    const target = review.reviews.find((r) => r.id === effect.reviewId);
     if (!target) return { steps: [] };
     if (effect.kind === "read-file") {
       const text = target.headFiles.get(effect.path) ?? "";
@@ -163,52 +231,62 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
     return { steps };
   }, []);
 
-  const ingest = useCallback(
-    (agent: AgentInfo, entries: TimelineEntry[], mode: "history" | "live") => {
-      if (!workspaceDir) return;
+  /** A subagent call in any lane gets its own child lane and a follower. */
+  const onSubagent = useCallback(
+    (parentId: string, ev: Extract<LiveEvent, { kind: "subagent" }>, mode: "history" | "live") => {
+      if (!ev.callId) return;
+      const parent = lanesRef.current.get(parentId);
+      const laneId = `${parentId}:${ev.callId}`;
+      const isNew = !lanesRef.current.has(laneId);
+      ensureLane(
+        laneId,
+        { parentId, label: ev.subAgentType ?? "Subagent", kind: "subagent", status: "running", fallback: false, task: ev.description },
+        parent?.cwd ?? "",
+      );
+      // The parent's card only tells us about failures; running/done comes from the transcript.
+      if (ev.status === "failed") updateLane(laneId, (l) => ({ ...l, info: { ...l.info, status: "failed" } }));
+      if (isNew) setRequests((r) => [...r, { laneId, toolUseId: ev.callId!, cwd: parent?.cwd ?? workspaceDir ?? "", historical: mode === "history" }]);
+    },
+    [ensureLane, updateLane, workspaceDir],
+  );
+
+  /** The heart of ingestion: one lane's events, from history (instant) or live (animated). */
+  const processEvents = useCallback(
+    (laneId: string, events: LiveEvent[], mode: "history" | "live") => {
+      const lane = () => lanesRef.current.get(laneId)!;
+      if (!lanesRef.current.has(laneId)) return;
       const history: LiveEvent[] = [];
-      for (const entry of entries) {
-        const ev = toLiveEvent(entry.item, {
-          agentId: agent.id,
-          agentLabel: agent.label,
-          agentCwd: agent.cwd,
-          workspaceDir,
-          at: entry.timestamp ?? new Date().toISOString(),
-          seq: entry.seq,
-        });
-        if (!ev) continue;
+      for (const ev of events) {
         if (ev.kind === "thought") {
           // Pieces of a message can repeat a key, so dedupe on key + text instead of the log.
           const id = `${ev.key}|${ev.text}`;
-          if (seenThoughts.current.has(id)) continue;
-          seenThoughts.current.add(id);
-          updateReview(applyToReview(reviewRef.current, ev).state);
-          updateLane(addThought(laneRef.current, ev, { instant: mode === "history" }));
+          if (lane().seenThoughts.has(id)) continue;
+          lane().seenThoughts.add(id);
+          updateLane(laneId, (l) => ({ ...l, review: applyToReview(l.review, ev).state, thoughts: addThought(l.thoughts, ev, { instant: mode === "history" }) }));
           continue;
         }
         // The log only needs a small copy for dedupe; review mode gets the full event below.
         const { log, change } = upsertEvent(logRef.current, forLog(ev));
         logRef.current = log;
         if (change === "none") continue;
+        if (ev.kind === "subagent") onSubagent(laneId, ev, mode);
 
         // Review mode sees every event; only live ones animate.
-        const reviewed = applyToReview(reviewRef.current, ev);
-        updateReview(reviewed.state);
-        updateLane(interrupt(laneRef.current, ev.agentId));
+        const reviewed = applyToReview(lane().review, ev);
+        updateLane(laneId, (l) => ({ ...l, review: reviewed.state, thoughts: interrupt(l.thoughts, ev.agentId) }));
         if (mode === "live") {
           for (const effect of reviewed.effects) {
             if (effect.kind === "switch") continue;
-            const plan = planFor(effect);
-            chainRef.current = chainRef.current.then(() => update((s) => enqueueRead(s, effect, plan)));
+            const plan = planFor(reviewed.state, effect);
+            chainRef.current = chainRef.current.then(() => updatePlayer(laneId, (s) => enqueueRead(s, effect, plan)));
           }
         }
         if (ev.kind === "read") continue;
         if (mode === "history") {
-          if (!inPlayer(ev.key) && !history.some((h) => h.key === ev.key)) {
-            seenRef.current.add(ev.key);
+          if (!lane().seen.has(ev.key) && !history.some((h) => h.key === ev.key)) {
+            lane().seen.add(ev.key);
             history.push(ev);
-          }
-          else update((s) => applyUpdate(s, ev));
+          } else updatePlayer(laneId, (s) => applyUpdate(s, ev));
           continue;
         }
 
@@ -220,8 +298,8 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
         chainRef.current = chainRef.current
           .then(async () => {
             // Checked here, in order, so a quick running→completed pair isn't queued twice.
-            if (inPlayer(ev.key)) {
-              update((s) => applyUpdate(s, ev));
+            if (lane().seen.has(ev.key)) {
+              updatePlayer(laneId, (s) => applyUpdate(s, ev));
               return;
             }
             // Edits and writes play once finished, with the file as it is right after them.
@@ -236,18 +314,53 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
                   console.error("[live-view] files.read failed", error);
                 }
               }
-              seenRef.current.add(ev.key);
-              update((s) => enqueue(s, { ...ev, afterText }));
+              lane().seen.add(ev.key);
+              updatePlayer(laneId, (s) => enqueue(s, { ...ev, afterText }));
               return;
             }
-            seenRef.current.add(ev.key);
-            update((s) => enqueue(s, ev));
+            lane().seen.add(ev.key);
+            updatePlayer(laneId, (s) => enqueue(s, ev));
           })
           .catch((error) => console.error("[live-view] ingest failed", error));
       }
-      if (history.length > 0) update((s) => seedHistory(s, history));
+      if (history.length > 0) updatePlayer(laneId, (s) => seedHistory(s, history));
     },
-    [workspaceDir, workspaceId, readRpc, refreshFiles, update, inPlayer, updateReview, updateLane, planFor],
+    [workspaceId, readRpc, refreshFiles, updateLane, updatePlayer, planFor, onSubagent],
+  );
+
+  const ingest = useCallback(
+    (agent: AgentInfo, entries: TimelineEntry[], mode: "history" | "live") => {
+      if (!workspaceDir) return;
+      ensureLane(agent.id, { parentId: null, label: agent.label, kind: "agent", status: "running", fallback: false, task: null }, agent.cwd);
+      const events: LiveEvent[] = [];
+      for (const entry of entries) {
+        const ev = toLiveEvent(entry.item, {
+          agentId: agent.id,
+          agentLabel: agent.label,
+          agentCwd: agent.cwd,
+          workspaceDir,
+          at: entry.timestamp ?? new Date().toISOString(),
+          seq: entry.seq,
+        });
+        if (ev) events.push(ev);
+      }
+      processEvents(agent.id, events, mode);
+    },
+    [workspaceDir, ensureLane, processEvents],
+  );
+
+  const ingestLane = useCallback(
+    (laneId: string, events: LiveEvent[], mode: "history" | "live") => processEvents(laneId, events, mode),
+    [processEvents],
+  );
+  const setLaneStatus = useCallback(
+    (laneId: string, status: LaneInfo["status"]) =>
+      updateLane(laneId, (l) => (l.info.status === status || l.info.status === "failed" ? l : { ...l, info: { ...l.info, status } })),
+    [updateLane],
+  );
+  const markFallback = useCallback(
+    (laneId: string) => updateLane(laneId, (l) => (l.info.fallback ? l : { ...l, info: { ...l.info, fallback: true } })),
+    [updateLane],
   );
 
   const resetAgent = useCallback((agentId: string) => {
@@ -256,6 +369,24 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
     logRef.current = { byKey, order: logRef.current.order.filter((k) => byKey.has(k)) };
   }, []);
 
+  // The lane on screen (Auto or pinned). When it changes, the thinking strip follows.
+  const lanes = useMemo(() => orderLanes(nameLanes(infos())), [version]);
+  const selectedId = pickLane(lanes, selection);
+  if (selectedIdRef.current !== selectedId) {
+    selectedIdRef.current = selectedId;
+    queueMicrotask(notifyThoughts);
+  }
+  const selected = selectedId ? lanesRef.current.get(selectedId) : undefined;
+  const player = selected?.player ?? EMPTY_PLAYER;
+  const review = selected?.review ?? emptyReview;
+
+  const forAll = useCallback(
+    (change: (s: PlayerState) => PlayerState) => {
+      for (const id of lanesRef.current.keys()) updatePlayer(id, change);
+    },
+    [updatePlayer],
+  );
+
   return useMemo(
     () => ({
       player,
@@ -263,20 +394,31 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
       agents,
       readFile,
       refreshFiles,
-      pause: () => update((s) => setPaused(s, true)),
-      play: () => update((s) => setPaused(s, false)),
-      setSpeed: (speed: Speed) => update((s) => setPlayerSpeed(s, speed)),
-      skipToLive: () => update(skipPlayer),
+      pause: () => forAll((s) => setPaused(s, true)),
+      play: () => forAll((s) => setPaused(s, false)),
+      setSpeed: (speed: Speed) => forAll((s) => setPlayerSpeed(s, speed)),
+      skipToLive: () => forAll(skipPlayer),
       review,
       thoughts,
-      setMode: (mode: "code" | "review", lastStartedKey: string | null) =>
-        updateReview(setReviewMode(reviewRef.current, mode, lastStartedKey)),
+      setMode: (mode: "code" | "review", lastStartedKey: string | null) => {
+        if (selectedId) updateLane(selectedId, (l) => ({ ...l, review: setReviewMode(l.review, mode, lastStartedKey) }));
+      },
+      lanes,
+      selection,
+      selectedId,
+      select: setSelection,
+      requests,
       ingest,
+      ingestLane,
+      setLaneStatus,
+      markFallback,
       resetAgent,
     }),
-    [player, files, agents, readFile, refreshFiles, update, ingest, resetAgent, review, thoughts, updateReview],
+    [player, files, agents, readFile, refreshFiles, forAll, review, thoughts, updateLane, lanes, selection, selectedId, requests, ingest, ingestLane, setLaneStatus, markFallback, resetAgent],
   );
 }
+
+const EMPTY_PLAYER = createPlayer();
 
 /** Follows one agent's timeline and feeds it into the Live View feed. Renders nothing. */
 export function AgentFollower({ agentRef, feed }: { agentRef: AgentRef; feed: LiveFeed }) {
