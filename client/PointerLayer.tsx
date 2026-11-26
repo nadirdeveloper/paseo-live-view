@@ -31,9 +31,18 @@ export function createRegister(registry: PointerRegistry): Register {
 const CHAR_WIDTH = 7.2;
 
 function spotId(target: PointerTarget): string {
-  if (target.kind === "tree") return `tree:${target.path}`;
-  if (target.kind === "editor") return "editor:line";
-  return `terminal:${target.key}`;
+  switch (target.kind) {
+    case "tree":
+      return `tree:${target.path}`;
+    case "pr-file":
+      return `pr:${target.path}`;
+    case "editor":
+      return "editor:line";
+    case "diff":
+      return "diff:line";
+    case "terminal":
+      return `terminal:${target.key}`;
+  }
 }
 
 type Props = { theme: Theme; target: PointerTarget | null; rootRef: RefObject<View | null>; registry: PointerRegistry };
@@ -48,8 +57,8 @@ export function PointerLayer({ theme, target, rootRef, registry }: Props) {
 
   const id = target ? spotId(target) : null;
   const column = target?.kind === "editor" ? target.column : 0;
-  const line = target?.kind === "editor" ? target.line : 0;
-  const click = target?.kind === "tree" && target.click;
+  const line = target?.kind === "editor" || target?.kind === "diff" ? target.line : 0;
+  const click = (target?.kind === "tree" || target?.kind === "pr-file") && target.click;
 
   useEffect(() => {
     if (!target || !id) return;
@@ -68,10 +77,15 @@ export function PointerLayer({ theme, target, rootRef, registry }: Props) {
         spot.view.measureInWindow((x, y, width, height) => {
           if (cancelled || (width === 0 && height === 0)) return;
           const offsetX =
-            target.kind === "editor" ? (spot.gutter ?? 40) + Math.min(column, 120) * CHAR_WIDTH + 2 : Math.min(48, width / 3);
+            target.kind === "editor"
+              ? (spot.gutter ?? 40) + Math.min(column, 120) * CHAR_WIDTH + 2
+              : target.kind === "diff"
+                ? (spot.gutter ?? 60) + 8
+                : Math.min(48, width / 3);
           const toX = Math.max(0, Math.min(rootWidth - 16, x - rootX + offsetX));
           const toY = Math.max(0, Math.min(rootHeight - 16, y - rootY + height / 2));
-          const sameArea = lastArea.current === "editor" && target.kind === "editor";
+          const reading = target.kind === "editor" || target.kind === "diff";
+          const sameArea = lastArea.current === target.kind && reading;
           lastArea.current = target.kind;
           Animated.parallel([
             Animated.timing(position, {

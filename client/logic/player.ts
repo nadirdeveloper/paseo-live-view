@@ -1,4 +1,5 @@
 import type { LiveEvent, ShellEvent } from "./events";
+import type { ReviewEffect } from "./review/state";
 import { BASE_CPS, TARGET_LAG_SEC, catchUpFactor, type Speed } from "./pacing";
 import { reconstructEdit } from "./reconstruct";
 
@@ -39,11 +40,17 @@ type TextScript = {
   highlightResult: boolean;
 };
 type DiffScript = { kind: "diff"; filePath: string; after: string; highlight: EditorFrame["highlight"] };
-type Script = TextScript | DiffScript | { kind: "shell" } | { kind: "instant" };
+export type ReadPlan = { steps: { path: string; from: number; to: number }[] };
+type ReadScript = { kind: "read"; reviewId: string; mode: "diff" | "file"; steps: ReadPlan["steps"] };
+type Script = TextScript | DiffScript | ReadScript | { kind: "shell" } | { kind: "instant" };
 
-type Phase = "dwell" | "delete" | "type" | "hold" | "output" | "done";
+type Phase = "dwell" | "delete" | "type" | "hold" | "output" | "read" | "done";
 
-type Playback = { item: Queued; script: Script; phase: Phase; progress: number };
+/** `step` indexes a read script's files; other scripts stay at 0. */
+type Playback = { item: Queued; script: Script; phase: Phase; progress: number; step: number };
+
+/** Where review mode is reading: diff lines (or file lines at PR head) from..to, up to cursorAt. */
+export type ReaderFrame = { reviewId: string; mode: "diff" | "file"; path: string; from: number; to: number; cursorAt: number | null };
 
 export type PlayerState = {
   queue: Queued[];
@@ -55,6 +62,7 @@ export type PlayerState = {
   /** Catch-up factor used by the last tick (1 = normal speed). */
   factor: number;
   editor: EditorFrame | null;
+  reader: ReaderFrame | null;
   terminal: TerminalEntry[];
   touched: string[];
 };
@@ -65,6 +73,8 @@ const HOLD_MS = 500;
 const BUSY_PAUSE_MS = 100;
 const OUTPUT_LINES_PER_SEC = 100;
 const MAX_DELETE_SEC = 1;
+/** Reading pace for diffs and files in review mode, before catch-up. */
+const READ_LINES_PER_SEC = 25;
 /** Finished events and terminal entries kept for the panel's lifetime. */
 export const MAX_DONE = 500;
 /** Share of the pre-edit pause spent gliding to the file before the pointer clicks it. */
@@ -80,6 +90,7 @@ export function createPlayer(): PlayerState {
     clock: 0,
     factor: 1,
     editor: null,
+    reader: null,
     terminal: [],
     touched: [],
   };
@@ -95,6 +106,7 @@ function keepLast<T>(items: T[]): T[] {
 function slim(ev: LiveEvent): LiveEvent {
   if (ev.kind === "edit") return { ...ev, afterText: undefined };
   if (ev.kind === "write") return { ...ev, afterText: undefined, content: ev.inWorkspace ? undefined : ev.content };
+  if (ev.kind === "shell" && ev.rawOutput !== undefined) return { ...ev, rawOutput: undefined };
   return ev;
 }
 
@@ -197,6 +209,8 @@ function buildScript(ev: LiveEvent): Script {
 
 function firstPhase(script: Script): Phase {
   switch (script.kind) {
+    case "read":
+      return "dwell";
     case "text":
       return "dwell";
     case "diff":
@@ -290,6 +304,20 @@ function render(s: PlayerState, pb: Playback): PlayerState {
   const ev = pb.item.event;
   const { script, phase, progress } = pb;
   const withEditor = (frame: EditorFrame) => (sameFrame(s.editor, frame) ? s : { ...s, editor: frame });
+  if (script.kind === "read") {
+    const step = script.steps[Math.min(pb.step, script.steps.length - 1)];
+    const cursorAt = phase === "read" ? Math.min(step.to, step.from + Math.floor(progress)) : null;
+    const frame: ReaderFrame = { reviewId: script.reviewId, mode: script.mode, path: step.path, from: step.from, to: step.to, cursorAt };
+    const same =
+      s.reader &&
+      s.reader.reviewId === frame.reviewId &&
+      s.reader.mode === frame.mode &&
+      s.reader.path === frame.path &&
+      s.reader.from === frame.from &&
+      s.reader.to === frame.to &&
+      s.reader.cursorAt === frame.cursorAt;
+    return same ? s : { ...s, reader: frame };
+  }
   if (script.kind === "text") {
     // A different file only opens once the pointer has clicked it in the tree.
     if (phase === "dwell" && s.editor?.filePath !== script.filePath && dwellFraction(s, pb) < CLICK_AT) return s;
@@ -328,7 +356,7 @@ function dwellFraction(s: PlayerState, pb: Playback): number {
 function startNext(s: PlayerState): PlayerState {
   const [item, ...queue] = s.queue;
   const script = item.script;
-  const pb: Playback = { item, script, phase: firstPhase(script), progress: 0 };
+  const pb: Playback = { item, script, phase: firstPhase(script), progress: 0, step: 0 };
   let next: PlayerState = { ...s, queue, current: pb };
   if (script.kind === "instant") {
     const entry = terminalEntryFor(item.event, true);
@@ -353,6 +381,11 @@ function totalForPhase(pb: Playback, busy: boolean, factor = 1): number {
       return (busy ? BUSY_PAUSE_MS : HOLD_MS) / factor;
     case "delete":
       return script.kind === "text" ? script.oldText.length : 0;
+    case "read": {
+      if (script.kind !== "read") return 0;
+      const step = script.steps[pb.step];
+      return step ? step.to - step.from + 1 : 0;
+    }
     case "type":
       if (script.kind === "text") return script.newText.length;
       return ev.kind === "shell" ? ev.command.length : 0;
@@ -377,12 +410,22 @@ function ratePerMs(pb: Playback, cps: number, factor: number): number {
       return cps / 1000;
     case "output":
       return (OUTPUT_LINES_PER_SEC * factor) / 1000;
+    case "read":
+      return (READ_LINES_PER_SEC * factor) / 1000;
     default:
       return 1;
   }
 }
 
-function nextPhase(pb: Playback): Phase {
+function nextPhase(pb: Playback): { phase: Phase; step: number } {
+  if (pb.script.kind === "read") {
+    if (pb.phase === "dwell") return { phase: "read", step: pb.step };
+    return pb.step + 1 < pb.script.steps.length ? { phase: "dwell", step: pb.step + 1 } : { phase: "done", step: pb.step };
+  }
+  return { phase: nextTextPhase(pb), step: pb.step };
+}
+
+function nextTextPhase(pb: Playback): Phase {
   const { script, phase } = pb;
   if (script.kind === "text") {
     return ({ dwell: "delete", delete: "type", type: "hold", hold: "done" } as Record<Phase, Phase>)[phase] ?? "done";
@@ -410,7 +453,13 @@ function remainingWork(s: PlayerState): { chars: number; fixedMs: number } {
     fixedMs += item.fixedMs;
   }
   const pb = s.current;
-  if (pb) {
+  if (pb && pb.script.kind === "read") {
+    for (let i = pb.step; i < pb.script.steps.length; i++) {
+      const step = pb.script.steps[i];
+      const lines = step.to - step.from + 1 - (i === pb.step && pb.phase === "read" ? pb.progress : 0);
+      fixedMs += (lines / READ_LINES_PER_SEC) * 1000 + (i === pb.step && pb.phase === "read" ? 0 : BUSY_PAUSE_MS);
+    }
+  } else if (pb) {
     const script = pb.script;
     const ev = pb.item.event;
     if (script.kind === "text") {
@@ -462,8 +511,11 @@ function prepare(event: LiveEvent, enqueuedAt: number): Queued {
 
 export type PhaseInfo = {
   key: string;
-  kind: "text" | "diff" | "shell" | "instant";
+  kind: "text" | "diff" | "shell" | "instant" | "read";
   filePath: string | null;
+  /** For reads: the review and the line being read. */
+  reviewId: string | null;
+  cursorAt: number | null;
   phase: Phase;
   /** 0..1 through the current phase. */
   fraction: number;
@@ -478,10 +530,47 @@ export function currentPhase(s: PlayerState): PhaseInfo | null {
   return {
     key: pb.item.event.key,
     kind: script.kind,
-    filePath: script.kind === "text" || script.kind === "diff" ? script.filePath : null,
+    filePath:
+      script.kind === "text" || script.kind === "diff"
+        ? script.filePath
+        : script.kind === "read"
+          ? script.steps[Math.min(pb.step, script.steps.length - 1)].path
+          : null,
+    reviewId: script.kind === "read" ? script.reviewId : null,
+    cursorAt: script.kind === "read" ? s.reader?.cursorAt ?? null : null,
     phase: pb.phase,
     fraction: total > 0 ? Math.min(1, pb.progress / total) : 1,
   };
+}
+
+function readCost(steps: ReadPlan["steps"]): number {
+  return steps.reduce((ms, step) => ms + BUSY_PAUSE_MS + ((step.to - step.from + 1) / READ_LINES_PER_SEC) * 1000, 0);
+}
+
+/** Queue a review-mode reading: a diff's newly read lines, or a whole file at PR head. */
+export function enqueueRead(
+  s: PlayerState,
+  effect: Extract<ReviewEffect, { kind: "read-diff" | "read-file" }>,
+  plan: ReadPlan,
+): PlayerState {
+  if (plan.steps.length === 0) return s;
+  const mode = effect.kind === "read-diff" ? "diff" : "file";
+  const range = effect.kind === "read-diff" ? `${effect.from}-${effect.to}` : effect.path;
+  const event: LiveEvent = {
+    key: `read:${effect.reviewId}:${mode}:${range}:${s.clock}`,
+    agentId: "",
+    agentLabel: "",
+    at: "",
+    status: "completed",
+    kind: "read",
+    filePath: plan.steps[0].path,
+    content: "",
+    offset: null,
+    limit: null,
+  };
+  const script: ReadScript = { kind: "read", reviewId: effect.reviewId, mode, steps: plan.steps };
+  const item: Queued = { event, enqueuedAt: s.clock, script, chars: 0, fixedMs: readCost(plan.steps) };
+  return { ...s, queue: [...s.queue, item] };
 }
 
 /** True when the editor, terminal, queue or controls would look different. */
@@ -494,6 +583,7 @@ export function visibleChanged(a: PlayerState, b: PlayerState): boolean {
     a.current?.phase !== b.current?.phase ||
     clicked(a) !== clicked(b) ||
     a.editor !== b.editor ||
+    a.reader !== b.reader ||
     a.terminal !== b.terminal ||
     a.touched !== b.touched ||
     a.queue.length !== b.queue.length ||
@@ -577,7 +667,7 @@ export function tick(s: PlayerState, dtMs: number): PlayerState {
     const needMs = (total - pb.progress) / rate;
     if (left >= needMs) {
       left -= needMs;
-      const advanced: Playback = { ...pb, phase: nextPhase(pb), progress: 0 };
+      const advanced: Playback = { ...pb, ...nextPhase(pb), progress: 0 };
       state = render({ ...state, current: advanced }, advanced);
     } else {
       const advanced: Playback = { ...pb, progress: pb.progress + left * rate };

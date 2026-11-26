@@ -3,7 +3,9 @@ import { CLICK_AT, currentPhase, type PlayerState } from "./player";
 export type PointerTarget =
   | { kind: "tree"; path: string; click: boolean }
   | { kind: "editor"; path: string; line: number; column: number }
-  | { kind: "terminal"; key: string };
+  | { kind: "terminal"; key: string }
+  | { kind: "pr-file"; reviewId: string; path: string; click: boolean }
+  | { kind: "diff"; line: number };
 
 
 function cursorPosition(text: string, cursor: number): { line: number; column: number } {
@@ -22,6 +24,10 @@ function cursorPosition(text: string, cursor: number): { line: number; column: n
 export function pointerTarget(s: PlayerState): PointerTarget | null {
   const info = currentPhase(s);
   if (!info) return null;
+  if (info.kind === "read") {
+    if (info.phase === "dwell") return { kind: "pr-file", reviewId: info.reviewId!, path: info.filePath!, click: info.fraction >= CLICK_AT };
+    return { kind: "diff", line: info.cursorAt ?? 1 };
+  }
   if (info.kind === "shell" || info.kind === "instant") return { kind: "terminal", key: info.key };
   const path = info.filePath!;
   if (info.kind === "text" && info.phase === "dwell") return { kind: "tree", path, click: info.fraction >= CLICK_AT };
