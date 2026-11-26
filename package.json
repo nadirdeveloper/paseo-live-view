@@ -1,7 +1,26 @@
 {
   "name": "paseo-live-view",
+  "version": "0.1.0",
+  "description": "Watch your Paseo agents work like a VS Code screen: live file edits with a moving pointer, a terminal of every command, PR review mode with pinned findings, and a separate replay for each subagent.",
+  "license": "MIT",
+  "author": "nadirdeveloper",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nadirdeveloper/paseo-live-view.git"
+  },
+  "homepage": "https://github.com/nadirdeveloper/paseo-live-view#readme",
+  "bugs": {
+    "url": "https://github.com/nadirdeveloper/paseo-live-view/issues"
+  },
+  "keywords": [
+    "paseo",
+    "paseo-plugin",
+    "claude-code",
+    "ai-agents",
+    "code-review",
+    "live-view"
+  ],
   "private": true,
-  "version": "0.0.0",
   "files": [
     "paseo-plugin.json",
     "OVERVIEW.md",
@@ -12,7 +31,10 @@
     "index.server.tsx",
     "client/",
     "server/",
-    "shared/"
+    "shared/",
+    "LICENSE",
+    "!**/*.test.ts",
+    "!server/fixtures/**"
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",

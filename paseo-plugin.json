@@ -1,8 +1,9 @@
 {
   "id": "live-view",
+  "name": "Live View",
+  "description": "Watch your Paseo agents work like a VS Code screen: live edits, commands, PR reviews and subagents, replayed in a side panel.",
   "media": [],
   "requirements": {
     "paseo": ">=0.17.4"
-  },
-  "name": "Live View"
+  }
 }

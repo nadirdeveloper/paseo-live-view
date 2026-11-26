@@ -28,11 +28,15 @@ describe("encodeCwd and configDirs", () => {
     expect(encodeCwd("/Users/me/work/my.app")).toBe("-Users-me-work-my-app");
   });
 
-  test("only the three known config folders that exist", async () => {
-    await mkdir(join(home, ".claude"));
-    await mkdir(join(home, ".claude-work"));
-    await mkdir(join(home, ".claude-mem"));
-    expect(configDirs(home)).toEqual([join(home, ".claude"), join(home, ".claude-work")]);
+  test("Claude Code config folders: ~/.claude, ~/.claude-* with a projects/ folder, and CLAUDE_CONFIG_DIR", async () => {
+    await mkdir(join(home, ".claude", "projects"), { recursive: true });
+    await mkdir(join(home, ".claude-work", "projects"), { recursive: true });
+    await mkdir(join(home, ".claude-mem")); // another tool's data: no projects/ folder
+    await writeFile(join(home, ".claude.json"), "{}");
+    const custom = join(home, "custom-claude");
+    await mkdir(join(custom, "projects"), { recursive: true });
+    expect(configDirs(home, {})).toEqual([join(home, ".claude"), join(home, ".claude-work")]);
+    expect(configDirs(home, { CLAUDE_CONFIG_DIR: custom })).toEqual([custom, join(home, ".claude"), join(home, ".claude-work")]);
   });
 });
 
@@ -46,9 +50,10 @@ describe("locate", () => {
     expect(isAllowedPath(path)).toBe(true);
   });
 
-  test("ignores matches in other projects and in other ~/.claude* folders", async () => {
+  test("ignores matches in other projects and in ~/.claude* folders that aren't Claude config folders", async () => {
     await subagent(".claude", "/Users/me/other", "a2", { toolUseId: "toolu_2" });
-    await subagent(".claude-mem", cwd, "a3", { toolUseId: "toolu_2" });
+    await mkdir(join(home, ".claude-mem", "data", "subagents"), { recursive: true });
+    await writeFile(join(home, ".claude-mem", "data", "subagents", "agent-a3.meta.json"), JSON.stringify({ toolUseId: "toolu_2" }));
     expect(await locate(home, "toolu_2", cwd)).toBeNull();
   });
 

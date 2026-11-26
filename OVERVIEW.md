@@ -25,7 +25,7 @@ A strip above the controls types out the agent's latest reasoning and messages a
 
 Each agent in the workspace, and each subagent it starts, gets its own replay. Live View watches the main agent and never switches by itself. While a subagent is working, a notice with a Watch button shows under the Watching bar; it disappears when the subagent finishes. A subagent that fails gets a notice too. The "Watching" dropdown lists the main agent, its subagents and their subagents, each with its task and status, so you can switch at any time. Every replay keeps going in the background, so switching shows exactly where that agent is.
 
-For Claude Code subagents, Live View reads the subagent's own log, which Claude Code writes next to the parent session, and replays its edits, commands, reviews and thinking. It looks only in the project folder that matches the agent's working directory, inside `~/.claude`, `~/.claude-work` and `~/.claude-alt`, and only opens logs that match a subagent the agent actually started. If a log can't be found, the subagent appears with its type, task and status only.
+For Claude Code subagents, Live View reads the subagent's own log, which Claude Code writes next to the parent session, and replays its edits, commands, reviews and thinking. It looks only in the project folder that matches the agent's working directory, inside Claude Code config folders (`~/.claude`, `$CLAUDE_CONFIG_DIR`, and other `~/.claude-*` folders that contain a `projects` folder), and only opens logs that match a subagent the agent actually started. If a log can't be found, the subagent appears with its type, task and status only.
 
 ## What it reads
 
@@ -33,7 +33,7 @@ For Claude Code subagents, Live View reads the subagent's own log, which Claude 
 - Claude Code subagent logs and their info files, as described above (read-only).
 - Files inside the workspace folder, to show the file list and the file around each edit. It never reads files outside the workspace folder, and it skips binary files and files over 1 MiB.
 
-Live View is read-only. It does not change files, run commands, or send anything off your machine.
+Live View is read-only. It does not change files or run commands, and it sends nothing anywhere: no data leaves your machine and nothing is sent to agent providers. Everything it shows comes from activity Paseo already has and files on your own disk.
 
 ## Limits
 

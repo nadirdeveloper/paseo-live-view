@@ -1,11 +1,9 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { open, readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { Entry } from "../shared/subagents";
 import { createNormalizer } from "./transcript";
 
-/** The only Claude config folders searched (the user's choice). */
-const CONFIG_DIRS = [".claude", ".claude-work", ".claude-alt"];
 
 export type SubagentMeta = { agentType?: string; description?: string; spawnDepth?: number; background: boolean };
 export type TailStatus = "running" | "done" | "idle";
@@ -22,8 +20,28 @@ export function encodeCwd(cwd: string): string {
   return cwd.replace(/[^a-zA-Z0-9]/g, "-");
 }
 
-export function configDirs(home: string): string[] {
-  return CONFIG_DIRS.map((d) => join(home, d)).filter((d) => existsSync(d));
+/**
+ * Claude Code config folders to search: `$CLAUDE_CONFIG_DIR` (if set), `~/.claude`, and any other
+ * `~/.claude-*` folder that has a `projects/` folder (extra accounts). Folders of other tools that
+ * merely start with ".claude" (no `projects/`) are skipped.
+ */
+export function configDirs(home: string, env: Record<string, string | undefined> = process.env): string[] {
+  const isConfig = (dir: string) => existsSync(join(dir, "projects"));
+  const dirs: string[] = [];
+  const custom = env.CLAUDE_CONFIG_DIR;
+  if (custom && isConfig(custom)) dirs.push(custom);
+  let names: string[] = [];
+  try {
+    names = readdirSync(home);
+  } catch {
+    // no home listing: nothing else to search
+  }
+  for (const name of names.sort()) {
+    if (name !== ".claude" && !name.startsWith(".claude-")) continue;
+    const dir = join(home, name);
+    if (isConfig(dir) && !dirs.includes(dir)) dirs.push(dir);
+  }
+  return dirs;
 }
 
 /** Find the transcript of the subagent started by tool call `toolUseId`, only in the cwd's project folder. */
