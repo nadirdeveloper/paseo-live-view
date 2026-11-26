@@ -37,6 +37,8 @@ export function eventChars(ev: LiveEvent): number {
     case "shell":
       return ev.command.length;
     case "subagent":
+    case "read":
+    case "thought":
       return 0;
   }
 }

@@ -1,4 +1,5 @@
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
+import { detectReviewCommand } from "./review/commands";
 
 export type EventStatus = "running" | "completed" | "failed" | "canceled";
 
@@ -32,9 +33,23 @@ export type ShellEvent = EventBase & {
   kind: "shell";
   command: string;
   output?: string;
+  /** Untrimmed output (≤ 2 MB), kept only for review commands. */
+  rawOutput?: string;
   hiddenLines: number;
   exitCode?: number | null;
 };
+
+/** A file the agent read with its Read tool (used by review mode for saved diffs). */
+export type ReadEvent = EventBase & {
+  kind: "read";
+  filePath: string;
+  content: string;
+  offset: number | null;
+  limit: number | null;
+};
+
+/** Something the agent thought (reasoning) or said (message). */
+export type ThoughtEvent = EventBase & { kind: "thought"; source: "reasoning" | "message"; text: string };
 
 export type SubagentEvent = EventBase & {
   kind: "subagent";
@@ -42,7 +57,7 @@ export type SubagentEvent = EventBase & {
   actions: string[];
 };
 
-export type LiveEvent = EditEvent | WriteEvent | ShellEvent | SubagentEvent;
+export type LiveEvent = EditEvent | WriteEvent | ShellEvent | SubagentEvent | ReadEvent | ThoughtEvent;
 
 export type EventContext = {
   agentId: string;
@@ -50,6 +65,8 @@ export type EventContext = {
   agentCwd: string;
   workspaceDir: string;
   at: string;
+  /** Position in the agent's timeline, for items that have no id of their own. */
+  seq?: number;
 };
 
 export type EventLog = { byKey: ReadonlyMap<string, LiveEvent>; order: readonly string[] };
@@ -58,6 +75,7 @@ export const emptyLog: EventLog = { byKey: new Map(), order: [] };
 
 export const MAX_OUTPUT_LINES = 200;
 export const MAX_OUTPUT_CHARS = 20000;
+export const MAX_RAW_OUTPUT = 2 * 1024 * 1024;
 
 /** Collapse `.` and `..` in an absolute POSIX path. */
 function normalize(path: string): string {
@@ -92,6 +110,21 @@ export function trimOutput(
 }
 
 export function toLiveEvent(item: AgentTimelineItem, ctx: EventContext): LiveEvent | null {
+  const position = ctx.seq ?? ctx.at;
+  if (item.type === "reasoning" || item.type === "assistant_message") {
+    const isMessage = item.type === "assistant_message";
+    const id = isMessage && item.messageId ? item.messageId : String(position);
+    return {
+      key: `${ctx.agentId}:${isMessage ? "msg" : "thought"}:${id}`,
+      agentId: ctx.agentId,
+      agentLabel: ctx.agentLabel,
+      at: ctx.at,
+      status: "completed",
+      kind: "thought",
+      source: isMessage ? "message" : "reasoning",
+      text: item.text,
+    };
+  }
   if (item.type !== "tool_call") return null;
   const base: EventBase = {
     key: `${ctx.agentId}:${item.callId}`,
@@ -126,15 +159,26 @@ export function toLiveEvent(item: AgentTimelineItem, ctx: EventContext): LiveEve
     }
     case "shell": {
       const trimmed = detail.output === undefined ? undefined : trimOutput(detail.output);
+      const keepRaw = detail.output !== undefined && detectReviewCommand(detail.command) !== null;
       return {
         ...base,
         kind: "shell",
         command: detail.command,
         output: trimmed?.text,
+        ...(keepRaw ? { rawOutput: detail.output!.slice(0, MAX_RAW_OUTPUT) } : {}),
         hiddenLines: trimmed?.hiddenLines ?? 0,
         exitCode: detail.exitCode,
       };
     }
+    case "read":
+      return {
+        ...base,
+        kind: "read",
+        filePath: absolutePath(detail.filePath, ctx.agentCwd),
+        content: (detail.content ?? "").slice(0, MAX_RAW_OUTPUT),
+        offset: detail.offset ?? null,
+        limit: detail.limit ?? null,
+      };
     case "sub_agent":
       return {
         ...base,

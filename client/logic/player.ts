@@ -143,7 +143,8 @@ function merge(previous: LiveEvent, next: LiveEvent): LiveEvent {
 
 function buildScript(ev: LiveEvent): Script {
   if (ev.kind === "shell") return { kind: "shell" };
-  if (ev.kind === "subagent" || isFailure(ev)) return { kind: "instant" };
+  // Reads and thoughts never play in the editor/terminal; they're handled by review mode and the strip.
+  if (ev.kind === "subagent" || ev.kind === "read" || ev.kind === "thought" || isFailure(ev)) return { kind: "instant" };
   if (ev.kind === "write") {
     const content = ev.content ?? ev.afterText ?? "";
     return {
@@ -236,7 +237,7 @@ function terminalEntryFor(ev: LiveEvent, instant: boolean): TerminalEntry | null
       kind: "subagent",
     };
   }
-  if (isFailure(ev)) {
+  if ((ev.kind === "edit" || ev.kind === "write") && isFailure(ev)) {
     return {
       key: ev.key,
       agentLabel: ev.agentLabel,

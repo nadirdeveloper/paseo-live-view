@@ -77,10 +77,40 @@ describe("toLiveEvent", () => {
     expect(ev).toMatchObject({ kind: "subagent", description: "Explore", actions: ["Read script.js", "Bash"] });
   });
 
-  test("reads, searches and messages are ignored", () => {
-    expect(toLiveEvent(toolCall({ type: "read", filePath: "a" }), ctx)).toBeNull();
+  test("searches and user messages are ignored", () => {
     expect(toLiveEvent(toolCall({ type: "search", query: "x" }), ctx)).toBeNull();
-    expect(toLiveEvent({ type: "assistant_message", text: "hi" } as AgentTimelineItem, ctx)).toBeNull();
+    expect(toLiveEvent({ type: "user_message", text: "hi" } as AgentTimelineItem, ctx)).toBeNull();
+  });
+});
+
+describe("review-related events", () => {
+  test("reasoning becomes a thought", () => {
+    const ev = toLiveEvent({ type: "reasoning", text: "Reading the diff" } as AgentTimelineItem, { ...ctx, seq: 7 });
+    expect(ev).toMatchObject({ kind: "thought", source: "reasoning", text: "Reading the diff", key: "agent-1:thought:7" });
+  });
+
+  test("an assistant message becomes a thought keyed by its id", () => {
+    const ev = toLiveEvent({ type: "assistant_message", text: "Done", messageId: "m1" } as AgentTimelineItem, ctx);
+    expect(ev).toMatchObject({ kind: "thought", source: "message", text: "Done", key: "agent-1:msg:m1" });
+  });
+
+  test("a read tool call becomes a read event", () => {
+    const ev = toLiveEvent(toolCall({ type: "read", filePath: "/tmp/pr.diff", content: "x\ny", offset: 400, limit: 200 }), ctx);
+    expect(ev).toMatchObject({ kind: "read", filePath: "/tmp/pr.diff", content: "x\ny", offset: 400, limit: 200 });
+  });
+
+  test("review commands keep their untrimmed output", () => {
+    const output = Array.from({ length: 1000 }, (_, i) => `+line ${i}`).join("\n");
+    const ev = toLiveEvent(toolCall({ type: "shell", command: "gh pr diff 12", output }), ctx);
+    if (ev?.kind !== "shell") throw new Error("expected shell");
+    expect(ev.rawOutput).toBe(output);
+    expect(ev.hiddenLines).toBe(800);
+  });
+
+  test("other commands don't keep raw output", () => {
+    const ev = toLiveEvent(toolCall({ type: "shell", command: "ls", output: "a" }), ctx);
+    if (ev?.kind !== "shell") throw new Error("expected shell");
+    expect(ev.rawOutput).toBeUndefined();
   });
 });
 

@@ -115,6 +115,8 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
           at: entry.timestamp ?? new Date().toISOString(),
         });
         if (!ev) continue;
+        // Reads and thoughts are for review mode and the thinking strip (wired in a later task).
+        if (ev.kind === "read" || ev.kind === "thought") continue;
         const { log, change } = upsertEvent(logRef.current, ev);
         logRef.current = log;
         if (change === "none") continue;
