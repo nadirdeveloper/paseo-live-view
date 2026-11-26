@@ -55,6 +55,9 @@ export type SubagentEvent = EventBase & {
   kind: "subagent";
   description: string;
   actions: string[];
+  /** The tool call that started it (matches the subagent's transcript meta `toolUseId`). */
+  callId?: string;
+  subAgentType?: string;
 };
 
 export type LiveEvent = EditEvent | WriteEvent | ShellEvent | SubagentEvent | ReadEvent | ThoughtEvent;
@@ -185,6 +188,8 @@ export function toLiveEvent(item: AgentTimelineItem, ctx: EventContext): LiveEve
         kind: "subagent",
         description: detail.description ?? detail.subAgentType ?? "sub-agent",
         actions: (detail.actions ?? []).map((a) => (a.summary ? `${a.toolName} ${a.summary}` : a.toolName)),
+        callId: item.callId,
+        subAgentType: detail.subAgentType,
       };
     default:
       return null;
