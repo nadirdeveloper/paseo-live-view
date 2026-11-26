@@ -1,3 +1,4 @@
+import { Icon } from "@getpaseo/plugin/client/ui";
 import { Pressable, Text, View } from "react-native";
 import type { Speed } from "./logic/pacing";
 import { type Theme } from "./style";
@@ -21,6 +22,9 @@ const SPEEDS: Speed[] = [0.5, 1, 2];
 export function Controls(props: Props) {
   const { theme, compact, paused, speed, queued, follow } = props;
   const chip = (active: boolean) => ({
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 4,
     paddingHorizontal: compact ? 8 : 10,
     paddingVertical: 4,
     borderRadius: 6,
@@ -53,7 +57,8 @@ export function Controls(props: Props) {
         onPress={paused ? props.onPlay : props.onPause}
         style={chip(paused)}
       >
-        <Text style={chipText(paused)}>{paused ? "▶ Play" : "⏸ Pause"}</Text>
+        <Icon name={paused ? "Play" : "Pause"} size={12} color={chipText(paused).color} />
+        <Text style={chipText(paused)}>{paused ? "Play" : "Pause"}</Text>
       </Pressable>
       {SPEEDS.map((s) => (
         <Pressable
@@ -72,7 +77,8 @@ export function Controls(props: Props) {
         onPress={props.onSkip}
         style={chip(false)}
       >
-        <Text style={chipText(false)}>⏭ live{queued > 0 ? ` (${queued} queued)` : ""}</Text>
+        <Icon name="SkipForward" size={12} color={chipText(false).color} />
+        <Text style={chipText(false)}>live{queued > 0 ? ` (${queued} queued)` : ""}</Text>
       </Pressable>
       <View style={{ flex: 1 }} />
       <Pressable
@@ -82,7 +88,8 @@ export function Controls(props: Props) {
         onPress={() => props.onFollow(!follow)}
         style={chip(follow)}
       >
-        <Text style={chipText(follow)}>{follow ? "● Following agent" : "○ Follow agent"}</Text>
+        <Icon name="MousePointer2" size={12} color={chipText(follow).color} />
+        <Text style={chipText(follow)}>{follow ? "Following agent" : "Follow agent"}</Text>
       </Pressable>
     </View>
   );

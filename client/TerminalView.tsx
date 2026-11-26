@@ -1,3 +1,4 @@
+import { Icon } from "@getpaseo/plugin/client/ui";
 import { memo, useRef } from "react";
 import { ScrollView, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import type { TerminalEntry } from "./logic/player";
@@ -25,11 +26,20 @@ const TerminalRow = memo(function TerminalRow({ theme, entry }: { theme: Theme; 
                       text: `exit ${entry.exitCode ?? "?"}`,
                       color: entry.exitCode === 0 ? theme.colors.statusSuccess : theme.colors.statusDanger,
                     };
-        const prefix = entry.kind === "subagent" ? "🤖 " : entry.kind === "failed-edit" ? "✗ edit " : "$ ";
+        const prefix = entry.kind === "subagent" ? "" : entry.kind === "failed-edit" ? "edit " : "$ ";
+        const icon =
+          entry.kind === "subagent"
+            ? { name: "Bot", color: theme.colors.accent }
+            : entry.kind === "failed-edit"
+              ? { name: "CircleX", color: theme.colors.statusDanger }
+              : { name: "SquareTerminal", color: theme.colors.statusSuccess };
         const shown = entry.output.split("\n").slice(0, entry.shownOutputLines).join("\n");
         return (
           <View style={{ gap: 2 }}>
             <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+              <View style={{ paddingTop: 1 }}>
+                <Icon name={icon.name} size={14} color={icon.color} />
+              </View>
               <Text style={{ flex: 1, color: theme.colors.foreground, ...mono }}>
                 <Text style={{ color: theme.colors.accent }}>{prefix}</Text>
                 {entry.kind === "failed-edit" ? baseName(entry.typedCommand) : entry.typedCommand}

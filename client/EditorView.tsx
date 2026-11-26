@@ -3,7 +3,9 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import { START, languageFor, stateAt, tokenizeLine, type LexState, type Token, type TokenKind } from "./logic/highlight";
 import type { EditorFrame } from "./logic/player";
 import { clipLine, visibleWindow } from "./logic/view";
-import { MONO, baseName, type Theme } from "./style";
+import { Icon } from "@getpaseo/plugin/client/ui";
+import { fileIcon } from "./logic/icons";
+import { MONO, baseName, toneColor, type Theme } from "./style";
 
 const LINE_HEIGHT = 18;
 const SHOW_MORE = 200;
@@ -190,6 +192,7 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
           backgroundColor: theme.colors.surface1,
         }}
       >
+        <Icon name={fileIcon(path).icon} size={14} color={toneColor(fileIcon(path).tone, theme)} />
         <Text numberOfLines={1} style={{ color: theme.colors.foreground, fontSize: 13, flexShrink: 1 }}>
           {baseName(path)}
         </Text>

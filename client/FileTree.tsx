@@ -1,7 +1,9 @@
 import { memo, useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { Icon } from "@getpaseo/plugin/client/ui";
 import type { TreeNode } from "./logic/fileTree";
-import { baseName, type Theme } from "./style";
+import { fileIcon, folderIcon } from "./logic/icons";
+import { baseName, toneColor, type Theme } from "./style";
 
 type Props = {
   theme: Theme;
@@ -62,9 +64,17 @@ export const FileTree = memo(function FileTree({ theme, tree, root, capped, touc
             backgroundColor: active ? theme.colors.surface2 : "transparent",
           }}
         >
-          <Text style={{ color: theme.colors.foregroundMuted, width: 14, fontSize: 11 }}>
+          <Text style={{ color: theme.colors.foregroundMuted, width: 12, fontSize: 10 }}>
             {isDir ? (isOpen ? "▾" : "▸") : ""}
           </Text>
+          {(() => {
+            const choice = isDir ? folderIcon(isOpen) : fileIcon(node.name);
+            return (
+              <View style={{ width: 20 }}>
+                <Icon name={choice.icon} size={14} color={toneColor(choice.tone, theme)} />
+              </View>
+            );
+          })()}
           <Text
             numberOfLines={1}
             style={{ flex: 1, color: active ? theme.colors.accent : theme.colors.foreground, fontSize: 13 }}
