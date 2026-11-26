@@ -91,3 +91,37 @@ describe("tail", () => {
     expect(statuses).toContain("idle");
   });
 });
+
+describe("tail timing and text (review #10, #11)", () => {
+  test("a transcript untouched for longer than the idle time starts as idle", async () => {
+    const { utimes } = await import("node:fs/promises");
+    const path = await subagent(".claude", cwd, "old", { toolUseId: "toolu_old" }, [assistantTool("c1", "Read", { file_path: "/w/a" })]);
+    const old = new Date(Date.now() - 60 * 60_000);
+    await utimes(path, old, old);
+    const statuses: string[] = [];
+    const controller = new AbortController();
+    const done = tail(path, () => {}, (s) => statuses.push(s), controller.signal, { pollMs: 10, idleMs: 3 * 60_000, endMs: 10 * 60 * 60_000 });
+    await new Promise((r) => setTimeout(r, 60));
+    controller.abort();
+    await done;
+    expect(statuses).toContain("idle");
+  });
+
+  test("a character split across two reads is not garbled", async () => {
+    const line = JSON.stringify({ type: "assistant", message: { id: "m", content: [{ type: "text", text: "نادر علی 🙂" }] } }) + "\n";
+    const bytes = Buffer.from(line, "utf8");
+    const cut = bytes.indexOf(Buffer.from("ا", "utf8")) + 1; // inside a 2-byte character
+    const path = await subagent(".claude", cwd, "utf", { toolUseId: "toolu_utf" });
+    const { appendFile: append } = await import("node:fs/promises");
+    const got: string[] = [];
+    const controller = new AbortController();
+    const done = tail(path, (es) => es.forEach((e) => e.kind === "text" && got.push(e.text)), () => {}, controller.signal, { pollMs: 10, idleMs: 10_000, endMs: 10_000 });
+    await append(path, bytes.subarray(0, cut));
+    await new Promise((r) => setTimeout(r, 50));
+    await append(path, bytes.subarray(cut));
+    await new Promise((r) => setTimeout(r, 50));
+    controller.abort();
+    await done;
+    expect(got).toEqual(["نادر علی 🙂"]);
+  });
+});

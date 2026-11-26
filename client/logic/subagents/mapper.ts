@@ -6,6 +6,14 @@ export type MapperContext = { laneId: string; agentLabel: string; agentCwd: stri
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
 
+/** Claude's Read results come numbered like `cat -n` ("     1\tline"); review mode needs the raw text. */
+function stripLineNumbers(text: string): string {
+  const lines = text.split("\n");
+  const numbered = /^\s*\d+[\t→]/;
+  if (!lines.filter((l) => l !== "").every((l) => numbered.test(l))) return text;
+  return lines.map((l) => l.replace(numbered, "")).join("\n");
+}
+
 /** One subagent transcript entry → the same LiveEvents the main agent produces. */
 export function entryToEvents(entry: Entry, ctx: MapperContext): LiveEvent[] {
   const base = { agentId: ctx.laneId, agentLabel: ctx.agentLabel, at: new Date().toISOString() };
@@ -71,7 +79,7 @@ export function entryToEvents(entry: Entry, ctx: MapperContext): LiveEvent[] {
           status,
           kind: "read",
           filePath: absolutePath(str(input.file_path) ?? "", ctx.agentCwd),
-          content: entry.result ?? "",
+          content: stripLineNumbers(entry.result ?? ""),
           offset: num(input.offset),
           limit: num(input.limit),
         },

@@ -197,6 +197,15 @@ export function toLiveEvent(item: AgentTimelineItem, ctx: EventContext): LiveEve
 }
 
 /** Same content, ignoring when it was seen (history and live copies differ only in `at`). */
+/** Add to a history batch; a later copy of the same call (e.g. with its result) replaces the earlier one. */
+export function pushHistory(list: LiveEvent[], ev: LiveEvent): LiveEvent[] {
+  const index = list.findIndex((h) => h.key === ev.key);
+  if (index === -1) return [...list, ev];
+  const next = list.slice();
+  next[index] = ev;
+  return next;
+}
+
 /** A small copy for the dedupe log: big payloads only matter while review mode applies them. */
 export function forLog(ev: LiveEvent): LiveEvent {
   if (ev.kind === "shell" && ev.rawOutput !== undefined) return { ...ev, rawOutput: undefined };

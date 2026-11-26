@@ -95,8 +95,11 @@ export async function tail(
   const metaPath = path.replace(/\.jsonl$/, ".meta.json");
   const normalizer = createNormalizer();
   let offset = 0;
-  let partial = "";
-  let lastNew = Date.now();
+  // Bytes of a line still being written (kept as bytes so a split character isn't garbled).
+  let partial = Buffer.alloc(0);
+  // Quiet time counts from the file's last write, so an old interrupted subagent starts as idle.
+  let lastNew = await stat(path).then((s) => s.mtimeMs).catch(() => Date.now());
+  let firstRead = true;
   let status: TailStatus = "running";
   onStatus("running");
 
@@ -113,11 +116,15 @@ export async function tail(
       const buffer = Buffer.alloc(size - offset);
       await handle.read(buffer, 0, buffer.length, offset);
       offset = size;
-      const text = partial + buffer.toString("utf8");
-      const lines = text.split("\n");
-      partial = lines.pop() ?? ""; // a line without its newline yet waits for the rest
+      const bytes = Buffer.concat([partial, buffer]);
+      const end = bytes.lastIndexOf(0x0a);
+      // A line without its newline yet waits for the rest.
+      partial = end === -1 ? bytes : bytes.subarray(end + 1);
+      const lines = end === -1 ? [] : bytes.subarray(0, end).toString("utf8").split("\n");
       const entries = normalizer.push(lines);
-      lastNew = Date.now();
+      // What was already in the file isn't new activity; only later writes are.
+      if (!firstRead) lastNew = Date.now();
+      firstRead = false;
       if (status === "idle") {
         status = "running";
         onStatus("running");

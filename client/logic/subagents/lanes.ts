@@ -30,13 +30,22 @@ export function nameLanes(lanes: LaneInfo[]): LaneInfo[] {
     .sort((a, b) => lanes.indexOf(lanes.find((x) => x.id === a.id)!) - lanes.indexOf(lanes.find((x) => x.id === b.id)!));
 }
 
-/** Auto: the lane that most recently started something (newest lane on a tie). A pin wins if it still exists. */
+/**
+ * Auto: the lane that most recently started something. Ties go to a working lane, then a main
+ * agent, then the newest lane. A pin wins if it still exists.
+ */
 export function pickLane(lanes: LaneInfo[], selection: "auto" | string): string | null {
   if (selection !== "auto" && lanes.some((l) => l.id === selection)) return selection;
+  const better = (a: LaneInfo, b: LaneInfo): boolean => {
+    if (a.lastStartedAt !== b.lastStartedAt) return a.lastStartedAt > b.lastStartedAt;
+    const working = (l: LaneInfo) => (l.status === "running" ? 1 : 0);
+    if (working(a) !== working(b)) return working(a) > working(b);
+    const top = (l: LaneInfo) => (l.parentId === null ? 1 : 0);
+    if (top(a) !== top(b)) return top(a) > top(b);
+    return a.createdAt > b.createdAt;
+  };
   let best: LaneInfo | null = null;
-  for (const l of lanes) {
-    if (!best || l.lastStartedAt > best.lastStartedAt || (l.lastStartedAt === best.lastStartedAt && l.createdAt > best.createdAt)) best = l;
-  }
+  for (const l of lanes) if (!best || better(l, best)) best = l;
   return best?.id ?? null;
 }
 

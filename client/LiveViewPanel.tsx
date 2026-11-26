@@ -58,6 +58,13 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   if (phase) lastStartedKey.current = phase.key;
   if (playing === "read") lastPlayed.current = "review";
   else if (playing === "text" || playing === "diff") lastPlayed.current = "code";
+  // These remember things about the lane on screen; start fresh when switching to another agent.
+  const shownLane = useRef(feed.selectedId);
+  if (shownLane.current !== feed.selectedId) {
+    shownLane.current = feed.selectedId;
+    lastPlayed.current = null;
+    lastStartedKey.current = phase?.key ?? null;
+  }
   const mode = displayMode(reviewState, playing, lastStartedKey.current, lastPlayed.current);
   const inReview = mode === "review";
   // Resizable panes (px).
@@ -71,6 +78,12 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   const reader = player.reader && review && player.reader.reviewId === review.id ? player.reader : null;
   // Keep showing the last file read after reading finishes, instead of jumping to the first file.
   const lastReadPath = useRef<string | null>(null);
+  const readLane = useRef(feed.selectedId);
+  if (readLane.current !== feed.selectedId) {
+    readLane.current = feed.selectedId;
+    lastReadPath.current = null;
+    if (prSelection !== null) setPrSelection(null);
+  }
   if (reader) lastReadPath.current = reader.path;
   const prPath = follow ? reader?.path ?? lastReadPath.current ?? review?.files[0]?.path ?? null : prSelection ?? lastReadPath.current ?? review?.files[0]?.path ?? null;
   const selectPr = useCallback((path: string) => {

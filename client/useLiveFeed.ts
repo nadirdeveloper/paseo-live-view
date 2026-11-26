@@ -2,7 +2,7 @@ import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import { useAgent, useAgents, usePaseo, useRpc, useWorkspace } from "@getpaseo/plugin/client";
 import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { filesListRpc, filesReadRpc, type FilesReadOutput } from "../shared/files";
-import { emptyLog, forLog, toLiveEvent, upsertEvent, type EventLog, type LiveEvent } from "./logic/events";
+import { emptyLog, forLog, pushHistory, toLiveEvent, upsertEvent, type EventLog, type LiveEvent } from "./logic/events";
 import { buildTree, type TreeNode } from "./logic/fileTree";
 import type { Speed } from "./logic/pacing";
 import { applyToReview, emptyReview, setMode as setReviewMode, type ReviewEffect, type ReviewState } from "./logic/review/state";
@@ -81,8 +81,10 @@ export type LiveFeed = {
 
 export type ThoughtStore = { get(): ThoughtLane; subscribe(listener: () => void): () => void };
 
-function newLane(info: LaneInfo, cwd: string): Lane {
-  return { info, player: createPlayer(), review: emptyReview, thoughts: emptyLane, seen: new Set(), seenThoughts: new Set(), cwd };
+function newLane(info: LaneInfo, cwd: string, controls: { paused: boolean; speed: Speed }): Lane {
+  // New lanes start with the controls the user already set (paused, speed).
+  const player = setPlayerSpeed(setPaused(createPlayer(), controls.paused), controls.speed);
+  return { info, player, review: emptyReview, thoughts: emptyLane, seen: new Set(), seenThoughts: new Set(), cwd };
 }
 
 export function useLiveFeed(workspaceId: string): LiveFeed {
@@ -100,6 +102,9 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
   const [requests, setRequests] = useState<SubagentRequest[]>([]);
+  const controlsRef = useRef<{ paused: boolean; speed: Speed }>({ paused: false, speed: 1 });
+  /** Last status each subagent's parent card reported (used when there's no transcript). */
+  const cardStatus = useRef(new Map<string, LaneInfo["status"]>());
   const [files, setFiles] = useState<LiveFeed["files"]>({ tree: [], capped: false, root: null });
   const [filesVersion, setFilesVersion] = useState(0);
   const knownPaths = useRef<Set<string>>(new Set());
@@ -154,7 +159,7 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
         if (existing.info.label !== info.label && info.kind === "agent") updateLane(id, (l) => ({ ...l, info: { ...l.info, label: info.label } }));
         return;
       }
-      lanesRef.current.set(id, newLane({ ...info, id, lastStartedAt: 0, createdAt: Date.now() + lanesRef.current.size / 1000 }, cwd));
+      lanesRef.current.set(id, newLane({ ...info, id, lastStartedAt: 0, createdAt: Date.now() + lanesRef.current.size / 1000 }, cwd, controlsRef.current));
       bump();
     },
     [bump, updateLane],
@@ -243,8 +248,14 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
         { parentId, label: ev.subAgentType ?? "Subagent", kind: "subagent", status: "running", fallback: false, task: ev.description },
         parent?.cwd ?? "",
       );
-      // The parent's card only tells us about failures; running/done comes from the transcript.
-      if (ev.status === "failed") updateLane(laneId, (l) => ({ ...l, info: { ...l.info, status: "failed" } }));
+      // Running/done normally comes from the transcript; the parent's card reports failures and
+      // is the only status a lane without a transcript (fallback) has.
+      const fromCard: LaneInfo["status"] =
+        ev.status === "failed" || ev.status === "canceled" ? "failed" : ev.status === "completed" ? "done" : "running";
+      cardStatus.current.set(laneId, fromCard);
+      if (fromCard === "failed" || lanesRef.current.get(laneId)?.info.fallback) {
+        updateLane(laneId, (l) => (l.info.status === fromCard ? l : { ...l, info: { ...l.info, status: fromCard } }));
+      }
       if (isNew) setRequests((r) => [...r, { laneId, toolUseId: ev.callId!, cwd: parent?.cwd ?? workspaceDir ?? "", historical: mode === "history" }]);
     },
     [ensureLane, updateLane, workspaceDir],
@@ -262,7 +273,13 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
           const id = `${ev.key}|${ev.text}`;
           if (lane().seenThoughts.has(id)) continue;
           lane().seenThoughts.add(id);
-          updateLane(laneId, (l) => ({ ...l, review: applyToReview(l.review, ev).state, thoughts: addThought(l.thoughts, ev, { instant: mode === "history" }) }));
+          updateLane(laneId, (l) => ({
+            ...l,
+            review: applyToReview(l.review, ev).state,
+            thoughts: addThought(l.thoughts, ev, { instant: mode === "history" }),
+            // Fresh thinking counts as activity, so Auto comes back to an agent that's thinking.
+            info: mode === "live" ? { ...l.info, lastStartedAt: Date.now() } : l.info,
+          }));
           continue;
         }
         // The log only needs a small copy for dedupe; review mode gets the full event below.
@@ -283,7 +300,10 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
         }
         if (ev.kind === "read") continue;
         if (mode === "history") {
-          if (!lane().seen.has(ev.key) && !history.some((h) => h.key === ev.key)) {
+          if (history.some((h) => h.key === ev.key)) {
+            // A later copy in the same batch (e.g. the call, then the call with its result).
+            history.splice(0, history.length, ...pushHistory(history, ev));
+          } else if (!lane().seen.has(ev.key)) {
             lane().seen.add(ev.key);
             history.push(ev);
           } else updatePlayer(laneId, (s) => applyUpdate(s, ev));
@@ -354,12 +374,19 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
     [processEvents],
   );
   const setLaneStatus = useCallback(
-    (laneId: string, status: LaneInfo["status"]) =>
-      updateLane(laneId, (l) => (l.info.status === status || l.info.status === "failed" ? l : { ...l, info: { ...l.info, status } })),
+    (laneId: string, status: LaneInfo["status"]) => {
+      updateLane(laneId, (l) => (l.info.status === status || l.info.status === "failed" ? l : { ...l, info: { ...l.info, status } }));
+      // A subagent that finishes hands Auto back to the agent that started it.
+      const parentId = lanesRef.current.get(laneId)?.info.parentId;
+      if (status === "done" && parentId) updateLane(parentId, (l) => ({ ...l, info: { ...l.info, lastStartedAt: Date.now() } }));
+    },
     [updateLane],
   );
   const markFallback = useCallback(
-    (laneId: string) => updateLane(laneId, (l) => (l.info.fallback ? l : { ...l, info: { ...l.info, fallback: true } })),
+    (laneId: string) =>
+      updateLane(laneId, (l) =>
+        l.info.fallback ? l : { ...l, info: { ...l.info, fallback: true, status: cardStatus.current.get(laneId) ?? l.info.status } },
+      ),
     [updateLane],
   );
 
@@ -394,9 +421,18 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
       agents,
       readFile,
       refreshFiles,
-      pause: () => forAll((s) => setPaused(s, true)),
-      play: () => forAll((s) => setPaused(s, false)),
-      setSpeed: (speed: Speed) => forAll((s) => setPlayerSpeed(s, speed)),
+      pause: () => {
+        controlsRef.current = { ...controlsRef.current, paused: true };
+        forAll((s) => setPaused(s, true));
+      },
+      play: () => {
+        controlsRef.current = { ...controlsRef.current, paused: false };
+        forAll((s) => setPaused(s, false));
+      },
+      setSpeed: (speed: Speed) => {
+        controlsRef.current = { ...controlsRef.current, speed };
+        forAll((s) => setPlayerSpeed(s, speed));
+      },
       skipToLive: () => forAll(skipPlayer),
       review,
       thoughts,

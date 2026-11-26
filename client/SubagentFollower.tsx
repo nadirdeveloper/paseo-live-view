@@ -10,13 +10,13 @@ const LOCATE_GAP_MS = 2000;
 type Props = { request: SubagentRequest; feed: LiveFeed; workspaceDir: string };
 
 /** Streams one located transcript into its lane. Renders nothing. */
-function SubagentTail({ request, feed, workspaceDir, path }: Props & { path: string }) {
+function SubagentTail({ request, feed, workspaceDir, path, onLost }: Props & { path: string; onLost(): void }) {
   const feedRef = useRef(feed);
   feedRef.current = feed;
   // A subagent found while loading history replays its existing steps instantly; later ones animate.
   const firstBatch = useRef(true);
   const input = useMemo(() => ({ path }), [path]);
-  useSubscription(subagentsTailSubscription, input, (event) => {
+  const state = useSubscription(subagentsTailSubscription, input, (event) => {
     const current = feedRef.current;
     if (event.type === "status") {
       current.setLaneStatus(request.laneId, event.status);
@@ -30,6 +30,13 @@ function SubagentTail({ request, feed, workspaceDir, path }: Props & { path: str
     firstBatch.current = false;
     current.ingestLane(request.laneId, events, mode);
   });
+  // A dropped connection (or a plugin restart) ends the stream; if the subagent isn't done, follow again.
+  const status = state.status;
+  useEffect(() => {
+    if (status !== "closed" && status !== "error") return;
+    const lane = feedRef.current.lanes.find((l) => l.id === request.laneId);
+    if (lane && lane.status !== "done") onLost();
+  }, [status]);
   return null;
 }
 
@@ -37,6 +44,12 @@ function SubagentTail({ request, feed, workspaceDir, path }: Props & { path: str
 export function SubagentFollower({ request, feed, workspaceDir }: Props) {
   const locateRpc = useRpc(subagentsLocateRpc);
   const [path, setPath] = useState<string | null>(null);
+  // Bumped to find and follow the transcript again after the stream drops.
+  const [retry, setRetry] = useState(0);
+  const lost = () => {
+    const delay = Math.min(30_000, LOCATE_GAP_MS * 2 ** Math.min(retry, 4));
+    setTimeout(() => setRetry((r) => r + 1), delay);
+  };
   const feedRef = useRef(feed);
   feedRef.current = feed;
 
@@ -63,9 +76,10 @@ export function SubagentFollower({ request, feed, workspaceDir }: Props) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [locateRpc, request.toolUseId, request.cwd, request.laneId]);
+  }, [locateRpc, request.toolUseId, request.cwd, request.laneId, retry]);
 
-  return path ? <SubagentTail request={request} feed={feed} workspaceDir={workspaceDir} path={path} /> : null;
+  // Keyed by retry so a reconnect starts a fresh subscription (locate re-allows the path on the server).
+  return path ? <SubagentTail key={retry} request={request} feed={feed} workspaceDir={workspaceDir} path={path} onLost={lost} /> : null;
 }
 
 export function SubagentFollowers({ feed, workspaceDir }: { feed: LiveFeed; workspaceDir: string | null }) {
