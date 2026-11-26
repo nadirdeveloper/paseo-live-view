@@ -1,0 +1,8 @@
+{
+  "id": "live-view",
+  "media": [],
+  "requirements": {
+    "paseo": ">=0.17.4"
+  },
+  "name": "Live View"
+}
