@@ -5,10 +5,14 @@ import { filesListRpc, filesReadRpc, type FilesReadOutput } from "../shared/file
 import { emptyLog, toLiveEvent, upsertEvent, type EventLog, type LiveEvent } from "./logic/events";
 import { buildTree, type TreeNode } from "./logic/fileTree";
 import type { Speed } from "./logic/pacing";
+import { applyToReview, emptyReview, setMode as setReviewMode, type ReviewEffect, type ReviewState } from "./logic/review/state";
+import { addThought, emptyLane, interrupt, tickThoughts, type ThoughtLane } from "./logic/thoughts";
 import {
   applyUpdate,
   createPlayer,
   enqueue,
+  enqueueRead,
+  type ReadPlan,
   seedHistory,
   setPaused,
   setSpeed as setPlayerSpeed,
@@ -25,7 +29,7 @@ const TICK_MS = 50;
 const HISTORY_LIMIT = 200;
 
 export type AgentInfo = { id: string; label: string; cwd: string };
-export type TimelineEntry = { item: AgentTimelineItem; timestamp?: string };
+export type TimelineEntry = { item: AgentTimelineItem; timestamp?: string; seq?: number };
 
 export type LiveFeed = {
   player: PlayerState;
@@ -37,6 +41,9 @@ export type LiveFeed = {
   play(): void;
   setSpeed(speed: Speed): void;
   skipToLive(): void;
+  review: ReviewState;
+  thoughts: ThoughtLane;
+  setMode(mode: "code" | "review"): void;
   /** Used by AgentFollower. */
   ingest(agent: AgentInfo, entries: TimelineEntry[], mode: "history" | "live"): void;
   resetAgent(agentId: string): void;
@@ -57,6 +64,21 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   const knownPaths = useRef<Set<string>>(new Set());
   /** Keys of every event handed to the player (queued, playing or finished). */
   const seenRef = useRef<Set<string>>(new Set());
+  const reviewRef = useRef<ReviewState>(emptyReview);
+  const [review, setReview] = useState<ReviewState>(emptyReview);
+  const laneRef = useRef<ThoughtLane>(emptyLane);
+  const [thoughts, setThoughts] = useState<ThoughtLane>(emptyLane);
+
+  const updateReview = useCallback((next: ReviewState) => {
+    if (next === reviewRef.current) return;
+    reviewRef.current = next;
+    setReview(next);
+  }, []);
+  const updateLane = useCallback((next: ThoughtLane) => {
+    if (next === laneRef.current) return;
+    laneRef.current = next;
+    setThoughts(next);
+  }, []);
 
   /** Ticks only re-render when something on screen changes; other updates always do. */
   const update = useCallback((change: (s: PlayerState) => PlayerState, fromTick = false) => {
@@ -73,6 +95,8 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
     logRef.current = emptyLog;
     seenRef.current = new Set();
     setPlayer(playerRef.current);
+    updateReview(emptyReview);
+    updateLane(emptyLane);
   }, [workspaceId]);
 
   useEffect(() => {
@@ -93,14 +117,34 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
     const id = setInterval(() => {
       const s = playerRef.current;
       if (!s.paused && (s.current || s.queue.length > 0)) update((p) => tick(p, TICK_MS), true);
+      updateLane(tickThoughts(laneRef.current, TICK_MS));
     }, TICK_MS);
     return () => clearInterval(id);
-  }, [update]);
+  }, [update, updateLane]);
 
   const readFile = useCallback((path: string) => readRpc({ workspaceId, path }), [readRpc, workspaceId]);
   const refreshFiles = useCallback(() => setFilesVersion((v) => v + 1), []);
 
   const inPlayer = useCallback((key: string) => seenRef.current.has(key), []);
+
+  /** One reading step per PR file the new diff lines touch (or the whole file at PR head). */
+  const planFor = useCallback((effect: Extract<ReviewEffect, { kind: "read-diff" | "read-file" }>): ReadPlan => {
+    const target = reviewRef.current.reviews.find((r) => r.id === effect.reviewId);
+    if (!target) return { steps: [] };
+    if (effect.kind === "read-file") {
+      const text = target.headFiles.get(effect.path) ?? "";
+      return { steps: [{ path: effect.path, from: 1, to: Math.max(1, text.split("\n").length) }] };
+    }
+    const steps: ReadPlan["steps"] = [];
+    target.files.forEach((file, i) => {
+      const end = target.files[i + 1] ? target.files[i + 1].at - 1 : Math.max(file.endAt, target.doc.lines.length);
+      const from = Math.max(file.at, effect.from);
+      const to = Math.min(end, effect.to);
+      if (from <= to) steps.push({ path: file.path, from, to });
+    });
+    if (steps.length === 0) steps.push({ path: target.files[0]?.path ?? target.label, from: effect.from, to: effect.to });
+    return { steps };
+  }, []);
 
   const ingest = useCallback(
     (agent: AgentInfo, entries: TimelineEntry[], mode: "history" | "live") => {
@@ -113,13 +157,29 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
           agentCwd: agent.cwd,
           workspaceDir,
           at: entry.timestamp ?? new Date().toISOString(),
+          seq: entry.seq,
         });
         if (!ev) continue;
-        // Reads and thoughts are for review mode and the thinking strip (wired in a later task).
-        if (ev.kind === "read" || ev.kind === "thought") continue;
         const { log, change } = upsertEvent(logRef.current, ev);
         logRef.current = log;
         if (change === "none") continue;
+
+        // Review mode and the thinking strip see every event; only live ones animate.
+        const reviewed = applyToReview(reviewRef.current, ev);
+        updateReview(reviewed.state);
+        if (ev.kind === "thought") {
+          updateLane(addThought(laneRef.current, ev, { instant: mode === "history" }));
+          continue;
+        }
+        updateLane(interrupt(laneRef.current));
+        if (mode === "live") {
+          for (const effect of reviewed.effects) {
+            if (effect.kind === "switch") continue;
+            const plan = planFor(effect);
+            chainRef.current = chainRef.current.then(() => update((s) => enqueueRead(s, effect, plan)));
+          }
+        }
+        if (ev.kind === "read") continue;
         if (mode === "history") {
           if (!inPlayer(ev.key) && !history.some((h) => h.key === ev.key)) {
             seenRef.current.add(ev.key);
@@ -162,7 +222,7 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
       }
       if (history.length > 0) update((s) => seedHistory(s, history));
     },
-    [workspaceDir, workspaceId, readRpc, refreshFiles, update, inPlayer],
+    [workspaceDir, workspaceId, readRpc, refreshFiles, update, inPlayer, updateReview, updateLane, planFor],
   );
 
   const resetAgent = useCallback((agentId: string) => {
@@ -182,10 +242,13 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
       play: () => update((s) => setPaused(s, false)),
       setSpeed: (speed: Speed) => update((s) => setPlayerSpeed(s, speed)),
       skipToLive: () => update(skipPlayer),
+      review,
+      thoughts,
+      setMode: (mode: "code" | "review") => updateReview(setReviewMode(reviewRef.current, mode)),
       ingest,
       resetAgent,
     }),
-    [player, files, agents, readFile, refreshFiles, update, ingest, resetAgent],
+    [player, files, agents, readFile, refreshFiles, update, ingest, resetAgent, review, thoughts, updateReview],
   );
 }
 
@@ -222,7 +285,7 @@ export function AgentFollower({ agentRef, feed }: { agentRef: AgentRef; feed: Li
       try {
         const page = await handle.timeline.refetch({ direction: "tail", limit: HISTORY_LIMIT });
         if (cancelled) return;
-        ingestRef.current(agent, page.entries.map((e) => ({ item: e.item, timestamp: e.timestamp })), mode);
+        ingestRef.current(agent, page.entries.map((e) => ({ item: e.item, timestamp: e.timestamp, seq: e.seqStart })), mode);
       } catch (error) {
         console.error("[live-view] timeline refetch failed", error);
       }
@@ -235,7 +298,9 @@ export function AgentFollower({ agentRef, feed }: { agentRef: AgentRef; feed: Li
       const event = message.event;
       if (event.type === "timeline") {
         attemptsRef.current = 0;
-        ingestRef.current(agent, [{ item: event.item }], "live");
+        // Stream messages carry the timeline position, matching history's seqStart (for dedupe).
+        const meta = message as { timestamp?: string; seq?: number };
+        ingestRef.current(agent, [{ item: event.item, timestamp: meta.timestamp, seq: meta.seq }], "live");
       } else if (event.type === "subscription_restored") {
         void loadTail("live");
       } else if (event.type === "replacement") {
