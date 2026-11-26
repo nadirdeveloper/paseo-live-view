@@ -58,7 +58,7 @@ export function PointerLayer({ theme, target, rootRef, registry }: Props) {
   const id = target ? spotId(target) : null;
   const column = target?.kind === "editor" ? target.column : 0;
   const line = target?.kind === "editor" || target?.kind === "diff" ? target.line : 0;
-  const click = (target?.kind === "tree" || target?.kind === "pr-file") && target.click;
+  const click = (target?.kind === "tree" || target?.kind === "pr-file" || target?.kind === "editor") && target.click === true;
 
   useEffect(() => {
     if (!target || !id) return;
@@ -100,7 +100,7 @@ export function PointerLayer({ theme, target, rootRef, registry }: Props) {
       });
     };
     // First try after the tree has had a moment to reveal and scroll to the row.
-    timer = setTimeout(() => attempt(8), 60);
+    timer = setTimeout(() => attempt(8), 30);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);

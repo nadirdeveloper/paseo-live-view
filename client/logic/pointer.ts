@@ -1,8 +1,9 @@
-import { CLICK_AT, currentPhase, type PlayerState } from "./player";
+import { AIM_CLICK_AT, CLICK_AT, currentPhase, type PlayerState } from "./player";
 
 export type PointerTarget =
   | { kind: "tree"; path: string; click: boolean }
-  | { kind: "editor"; path: string; line: number; column: number }
+  /** click: set while aiming at the line before an edit (true = the pointer clicks it). */
+  | { kind: "editor"; path: string; line: number; column: number; click?: boolean }
   | { kind: "terminal"; key: string }
   | { kind: "pr-file"; reviewId: string; path: string; click: boolean }
   | { kind: "diff"; line: number };
@@ -32,7 +33,13 @@ export function pointerTarget(s: PlayerState): PointerTarget | null {
   }
   if (info.kind === "shell" || info.kind === "instant") return { kind: "terminal", key: info.key };
   const path = info.filePath!;
-  if (info.kind === "text" && info.phase === "dwell") return { kind: "tree", path, click: info.fraction >= CLICK_AT };
+  if (info.kind === "text" && (info.phase === "dwell" || info.phase === "aim")) {
+    const at = { kind: "editor" as const, path, line: info.editLine ?? 1, column: info.editColumn ?? 0 };
+    if (info.phase === "aim") return { ...at, click: info.fraction >= AIM_CLICK_AT };
+    // The file is already open: skip the tree and go straight to the line.
+    if (info.alreadyOpen) return { ...at, click: false };
+    return { kind: "tree", path, click: info.fraction >= CLICK_AT };
+  }
   const editor = s.editor;
   if (editor && editor.cursor !== null) return { kind: "editor", path, ...cursorPosition(editor.text, editor.cursor) };
   return { kind: "editor", path, line: editor?.highlight?.startLine ?? 1, column: 0 };

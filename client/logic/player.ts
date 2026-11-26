@@ -46,10 +46,12 @@ export type ReadPlan = { steps: { path: string; from: number; to: number }[] };
 type ReadScript = { kind: "read"; reviewId: string; mode: "diff" | "file"; steps: ReadPlan["steps"] };
 type Script = TextScript | DiffScript | ReadScript | { kind: "shell" } | { kind: "instant" };
 
-type Phase = "dwell" | "delete" | "type" | "hold" | "output" | "read" | "done";
+/** dwell: go to the file and click it · aim: go to the line and click it · then delete/type/hold. */
+type Phase = "dwell" | "aim" | "delete" | "type" | "hold" | "output" | "read" | "done";
 
 /** `step` indexes a read script's files; other scripts stay at 0. */
-type Playback = { item: Queued; script: Script; phase: Phase; progress: number; step: number };
+/** alreadyOpen: the edit's file was on screen when it started, so there is no trip to the tree. */
+type Playback = { item: Queued; script: Script; phase: Phase; progress: number; step: number; alreadyOpen: boolean };
 
 /** Where review mode is reading: diff lines (or file lines at PR head) from..to, up to cursorAt. */
 export type ReaderFrame = { reviewId: string; mode: "diff" | "file"; path: string; from: number; to: number; cursorAt: number | null };
@@ -70,7 +72,9 @@ export type PlayerState = {
 };
 
 /** Calm pause before an edit: long enough for the pointer to glide to the file and click it. */
-const DWELL_MS = 700;
+const DWELL_MS = 800;
+/** Calm pause after the file opens: the pointer glides to the line and clicks before typing starts. */
+const AIM_MS = 650;
 const HOLD_MS = 500;
 const BUSY_PAUSE_MS = 100;
 const OUTPUT_LINES_PER_SEC = 100;
@@ -80,7 +84,22 @@ const READ_LINES_PER_SEC = 25;
 /** Finished events and terminal entries kept for the panel's lifetime. */
 export const MAX_DONE = 500;
 /** Share of the pre-edit pause spent gliding to the file before the pointer clicks it. */
-export const CLICK_AT = 2 / 3;
+export const CLICK_AT = 0.7;
+/** Share of the aim spent gliding to the line before the pointer clicks it. */
+export const AIM_CLICK_AT = 0.75;
+
+/** 1-based line and 0-based column of a character offset. */
+function positionOf(text: string, offset: number): { line: number; column: number } {
+  let line = 1;
+  let lineStart = 0;
+  for (let i = 0; i < offset && i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) {
+      line++;
+      lineStart = i + 1;
+    }
+  }
+  return { line, column: offset - lineStart };
+}
 
 export function createPlayer(): PlayerState {
   return {
@@ -282,8 +301,10 @@ function textFrame(script: TextScript, ev: LiveEvent, phase: Phase, progress: nu
   const prefix = script.before.slice(0, script.offset);
   const rest = script.before.slice(script.offset + script.oldText.length);
   const frame = { filePath: script.filePath, agentLabel: ev.agentLabel, note: script.note };
-  if (phase === "dwell") {
-    return { ...frame, text: script.before, cursor: script.offset + script.oldText.length, highlight: null };
+  if (phase === "dwell" || phase === "aim") {
+    // The file is open but nothing is typed yet: keep the edit line in view for the pointer.
+    const { line } = positionOf(script.before, script.offset + script.oldText.length);
+    return { ...frame, text: script.before, cursor: null, highlight: null, focusLine: line };
   }
   if (phase === "delete") {
     const kept = script.oldText.slice(0, script.oldText.length - Math.floor(progress));
@@ -350,6 +371,7 @@ function render(s: PlayerState, pb: Playback): PlayerState {
   return s;
 }
 
+/** How far through its current phase a playback is (0..1). */
 function dwellFraction(s: PlayerState, pb: Playback): number {
   const total = totalForPhase(pb, s.queue.length > 0, s.factor);
   return total > 0 ? Math.min(1, pb.progress / total) : 1;
@@ -358,7 +380,8 @@ function dwellFraction(s: PlayerState, pb: Playback): number {
 function startNext(s: PlayerState): PlayerState {
   const [item, ...queue] = s.queue;
   const script = item.script;
-  const pb: Playback = { item, script, phase: firstPhase(script), progress: 0, step: 0 };
+  const alreadyOpen = script.kind === "text" && s.editor?.filePath === script.filePath;
+  const pb: Playback = { item, script, phase: firstPhase(script), progress: 0, step: 0, alreadyOpen };
   let next: PlayerState = { ...s, queue, current: pb };
   if (script.kind === "instant") {
     const entry = terminalEntryFor(item.event, true);
@@ -382,6 +405,8 @@ function totalForPhase(pb: Playback, busy: boolean, factor = 1): number {
   switch (pb.phase) {
     case "dwell":
       return (busy ? BUSY_PAUSE_MS : DWELL_MS) / factor;
+    case "aim":
+      return (busy ? BUSY_PAUSE_MS : AIM_MS) / factor;
     case "hold":
       return (busy ? BUSY_PAUSE_MS : HOLD_MS) / factor;
     case "delete":
@@ -405,6 +430,7 @@ function totalForPhase(pb: Playback, busy: boolean, factor = 1): number {
 function ratePerMs(pb: Playback, cps: number, factor: number): number {
   switch (pb.phase) {
     case "dwell":
+    case "aim":
     case "hold":
       return 1;
     case "delete": {
@@ -433,7 +459,7 @@ function nextPhase(pb: Playback): { phase: Phase; step: number } {
 function nextTextPhase(pb: Playback): Phase {
   const { script, phase } = pb;
   if (script.kind === "text") {
-    return ({ dwell: "delete", delete: "type", type: "hold", hold: "done" } as Record<Phase, Phase>)[phase] ?? "done";
+    return ({ dwell: "aim", aim: "delete", delete: "type", type: "hold", hold: "done" } as Record<Phase, Phase>)[phase] ?? "done";
   }
   if (script.kind === "shell") {
     if (phase === "type") return pb.item.event.status === "running" ? "done" : "output";
@@ -469,9 +495,11 @@ function remainingWork(s: PlayerState): { chars: number; fixedMs: number } {
     const ev = pb.item.event;
     if (script.kind === "text") {
       const oldLeft = script.oldText.length - (pb.phase === "delete" ? pb.progress : 0);
-      if (pb.phase === "dwell") chars += script.newText.length + script.oldText.length / 4;
+      if (pb.phase === "dwell" || pb.phase === "aim") chars += script.newText.length + script.oldText.length / 4;
       if (pb.phase === "delete") chars += script.newText.length + oldLeft / 4;
       if (pb.phase === "type") chars += script.newText.length - pb.progress;
+      if (pb.phase === "dwell") fixedMs += BUSY_PAUSE_MS;
+      if (pb.phase === "dwell" || pb.phase === "aim") fixedMs += BUSY_PAUSE_MS;
       if (pb.phase !== "hold") fixedMs += BUSY_PAUSE_MS;
       fixedMs += BUSY_PAUSE_MS;
     } else if (script.kind === "diff") {
@@ -504,7 +532,7 @@ function prepare(event: LiveEvent, enqueuedAt: number): Queued {
   let fixedMs = 0;
   if (script.kind === "text") {
     chars = script.newText.length + script.oldText.length / 4;
-    fixedMs = 2 * BUSY_PAUSE_MS;
+    fixedMs = 3 * BUSY_PAUSE_MS;
   } else if (script.kind === "diff") {
     fixedMs = BUSY_PAUSE_MS;
   } else if (script.kind === "shell" && event.kind === "shell") {
@@ -518,6 +546,10 @@ export type PhaseInfo = {
   key: string;
   kind: "text" | "diff" | "shell" | "instant" | "read";
   filePath: string | null;
+  /** For text edits: where the edit happens (for the pointer's aim). */
+  editLine: number | null;
+  editColumn: number | null;
+  alreadyOpen: boolean;
   /** For reads: the review, diff or whole file, and the line being read. */
   reviewId: string | null;
   readMode: "diff" | "file" | null;
@@ -542,6 +574,9 @@ export function currentPhase(s: PlayerState): PhaseInfo | null {
         : script.kind === "read"
           ? script.steps[Math.min(pb.step, script.steps.length - 1)].path
           : null,
+    alreadyOpen: pb.alreadyOpen,
+    editLine: script.kind === "text" ? positionOf(script.before, script.offset + script.oldText.length).line : null,
+    editColumn: script.kind === "text" ? positionOf(script.before, script.offset + script.oldText.length).column : null,
     reviewId: script.kind === "read" ? script.reviewId : null,
     readMode: script.kind === "read" ? script.mode : null,
     cursorAt: script.kind === "read" ? s.reader?.cursorAt ?? null : null,
@@ -584,7 +619,10 @@ export function enqueueRead(
 export function visibleChanged(a: PlayerState, b: PlayerState): boolean {
   const clicked = (s: PlayerState) => {
     const pb = s.current;
-    return !!pb && pb.phase === "dwell" && dwellFraction(s, pb) >= CLICK_AT;
+    if (!pb) return false;
+    if (pb.phase === "dwell") return dwellFraction(s, pb) >= CLICK_AT;
+    if (pb.phase === "aim") return dwellFraction(s, pb) >= AIM_CLICK_AT;
+    return false;
   };
   return (
     a.current?.phase !== b.current?.phase ||

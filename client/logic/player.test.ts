@@ -109,7 +109,8 @@ describe("edit replay frames", () => {
       s = tick(s, 10);
       if (s.editor) frames.push({ text: s.editor.text, cursor: s.editor.cursor });
     }
-    expect(frames[0]).toEqual({ text: "a\nOLD\nc", cursor: 5 });
+    // The file opens with no text cursor; the cursor appears once the pointer has clicked the line.
+    expect(frames[0]).toEqual({ text: "a\nOLD\nc", cursor: null });
     expect(frames.some((f) => f.text === "a\n\nc" && f.cursor === 2)).toBe(true);
     expect(frames.some((f) => f.text === "a\nN\nc" && f.cursor === 3)).toBe(true);
     expect(s.editor).toMatchObject({ text: "a\nNEW\nc", cursor: null, highlight: { startLine: 2, endLine: 2 } });
@@ -213,7 +214,7 @@ describe("pointer beats", () => {
     s = enqueue(s, edit("b\nNEXT", "PREV", "NEXT", "/w/second.js"));
     s = tick(s, 50);
     expect(s.editor?.filePath).toBe("/w/first.js");
-    s = run(s, 500, 50);
+    s = run(s, 700, 50);
     expect(s.editor?.filePath).toBe("/w/second.js");
   });
 
