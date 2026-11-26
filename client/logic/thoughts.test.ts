@@ -14,8 +14,8 @@ describe("addThought", () => {
     expect(l.items.map((t) => t.text)).toEqual(["I am reading"]);
   });
 
-  test("the same key replaces the text", () => {
-    let l = addThought(emptyLane, thought("draft", "message", "a:msg:1"), { instant: false });
+  test("the same key with a fuller copy replaces the text", () => {
+    let l = addThought(emptyLane, thought("final", "message", "a:msg:1"), { instant: false });
     l = addThought(l, thought("final answer", "message", "a:msg:1"), { instant: false });
     expect(l.items.map((t) => t.text)).toEqual(["final answer"]);
   });

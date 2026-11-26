@@ -9,7 +9,10 @@ import { placedFindings } from "./reviewModel";
 import { ThinkingStrip } from "./ThinkingStrip";
 import { EditorView, type ManualView } from "./EditorView";
 import { FileTree } from "./FileTree";
+import { currentPhase } from "./logic/player";
 import { pointerTarget } from "./logic/pointer";
+import { displayMode } from "./logic/review/mode";
+import { Splitter } from "./Splitter";
 import { PointerContext, PointerLayer, createRegister, type PointerRegistry } from "./PointerLayer";
 import { TerminalView } from "./TerminalView";
 import { AgentFollowers, useLiveFeed } from "./useLiveFeed";
@@ -37,13 +40,26 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
 
   // Review mode: the newest review, its findings, and which file is shown.
   const { review: reviewState } = feed;
-  const inReview = reviewState.mode === "review";
+  // Show what is playing now (a read → Review, an edit → Code), unless the user picked a mode.
+  const playing = currentPhase(player)?.kind ?? null;
+  const lastPlayed = useRef<"code" | "review" | null>(null);
+  if (playing === "read") lastPlayed.current = "review";
+  else if (playing === "text" || playing === "diff") lastPlayed.current = "code";
+  const mode = displayMode(reviewState, playing, lastPlayed.current);
+  const inReview = mode === "review";
+  // Resizable panes (px).
+  const [treeWidth, setTreeWidth] = useState(240);
+  const [terminalHeight, setTerminalHeight] = useState(220);
+  const [thinkingHeight, setThinkingHeight] = useState(96);
   const review = reviewState.reviews.find((r) => r.id === reviewState.activeId) ?? reviewState.reviews[reviewState.reviews.length - 1] ?? null;
   const findings = useMemo(() => placedFindings(review), [review]);
   const [prSelection, setPrSelection] = useState<string | null>(null);
   const [showWorkspace, setShowWorkspace] = useState(false);
   const reader = player.reader && review && player.reader.reviewId === review.id ? player.reader : null;
-  const prPath = follow && reader ? reader.path : prSelection ?? reader?.path ?? review?.files[0]?.path ?? null;
+  // Keep showing the last file read after reading finishes, instead of jumping to the first file.
+  const lastReadPath = useRef<string | null>(null);
+  if (reader) lastReadPath.current = reader.path;
+  const prPath = follow ? reader?.path ?? lastReadPath.current ?? review?.files[0]?.path ?? null : prSelection ?? lastReadPath.current ?? review?.files[0]?.path ?? null;
   const selectPr = useCallback((path: string) => {
     setFollow(false);
     setPrSelection(path);
@@ -51,6 +67,21 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   }, []);
   const headText = review && prPath ? review.headFiles.get(prPath) : undefined;
   const readingHeadFile = reader?.mode === "file" && reader.path === prPath;
+  const headFrame = useMemo(
+    () =>
+      prPath && headText !== undefined
+        ? {
+            filePath: prPath,
+            agentLabel: "reading at PR head",
+            text: headText,
+            cursor: null,
+            highlight: readingHeadFile && reader?.cursorAt != null ? { startLine: reader.from, endLine: reader.cursorAt } : null,
+            note: null,
+            focusLine: readingHeadFile ? reader?.cursorAt ?? null : null,
+          }
+        : null,
+    [prPath, headText, readingHeadFile, reader?.from, reader?.cursorAt],
+  );
 
   // Read the latest values through refs so openFile keeps one identity and FileTree can skip renders.
   const doneRef = useRef(player.done);
@@ -107,22 +138,17 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   // In review mode: a file fetched at PR head shows in the editor with the reading band; otherwise the diff.
   const reviewMain =
     review && prPath ? (
-      headText !== undefined && (readingHeadFile || !review.files.some((f) => f.path === prPath)) ? (
-        <EditorView
-          theme={theme}
-          compact={compact}
-          frame={{
-            filePath: prPath,
-            agentLabel: "reading at PR head",
-            text: headText,
-            cursor: null,
-            highlight: readingHeadFile && reader ? { startLine: reader.from, endLine: reader.cursorAt ?? reader.to } : null,
-            note: null,
-          }}
-          manual={null}
-        />
+      headFrame && (readingHeadFile || !review.files.some((f) => f.path === prPath)) ? (
+        <EditorView theme={theme} compact={compact} frame={headFrame} manual={null} />
       ) : (
-        <DiffView theme={theme} review={review} path={prPath} reader={reader} findings={findings} />
+        <DiffView
+          theme={theme}
+          review={review}
+          path={prPath}
+          reader={reader && reader.path === prPath ? reader : null}
+          findings={findings}
+          follow={follow}
+        />
       )
     ) : null;
   const editor = inReview && reviewMain ? reviewMain : codeEditor;
@@ -144,8 +170,8 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
     ) : (
       tree
     );
-  const bar = <ReviewBar theme={theme} mode={reviewState.mode} review={review} onMode={feed.setMode} />;
-  const thinking = <ThinkingStrip theme={theme} lane={feed.thoughts} />;
+  const bar = <ReviewBar theme={theme} mode={mode} review={review} onMode={feed.setMode} />;
+  const thinking = <ThinkingStrip theme={theme} store={feed.thoughts} height={thinkingHeight} />;
   const terminal = <TerminalView theme={theme} entries={player.terminal} />;
   const controls = (
     <Controls
@@ -192,7 +218,7 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
           {tab("thinking", "Thinking")}
         </View>
         <View style={{ flex: 1 }}>
-          {pane === "files" ? left : pane === "editor" ? editor : pane === "terminal" ? terminal : <ThinkingStrip theme={theme} lane={feed.thoughts} fill />}
+          {pane === "files" ? left : pane === "editor" ? editor : pane === "terminal" ? terminal : <ThinkingStrip theme={theme} store={feed.thoughts} fill />}
         </View>
         {controls}
       </View>
@@ -204,15 +230,16 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
     <View ref={rootRef} style={{ flex: 1, backgroundColor: theme.colors.surface0 }}>
       <AgentFollowers feed={feed} />
       {bar}
-      <View style={{ flex: 65, flexDirection: "row" }}>
-        <View style={{ width: inReview ? 260 : 220, borderRightWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface1 }}>
-          {left}
-        </View>
+      <View style={{ flex: 1, flexDirection: "row" }}>
+        <View style={{ width: treeWidth, backgroundColor: theme.colors.surface1 }}>{left}</View>
+        <Splitter theme={theme} direction="column" size={treeWidth} min={140} max={560} onResize={setTreeWidth} />
         <View style={{ flex: 1 }}>{editor}</View>
       </View>
+      <Splitter theme={theme} direction="row" size={thinkingHeight} min={40} max={320} sign={-1} onResize={setThinkingHeight} />
       {thinking}
       {controls}
-      <View style={{ flex: 35 }}>{terminal}</View>
+      <Splitter theme={theme} direction="row" size={terminalHeight} min={80} max={640} sign={-1} onResize={setTerminalHeight} />
+      <View style={{ height: terminalHeight }}>{terminal}</View>
       <PointerLayer theme={theme} target={target} rootRef={rootRef} registry={registry} />
     </View>
     </PointerContext.Provider>

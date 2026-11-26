@@ -73,13 +73,14 @@ describe("parseUnifiedDiff", () => {
     ]);
   });
 
-  test("gaps (lines not read yet) are skipped without breaking numbering of later hunks", () => {
+  test("after a gap nothing is attributed until the next file header", () => {
     const lines: (string | undefined)[] = [...twoFiles];
     lines[10] = undefined;
     lines[11] = undefined;
     const files = parseUnifiedDiff(lines);
-    expect(files[0].hunks[1].lines.map((l) => l.text)).toEqual(["eleven"]);
-    expect(files[0].hunks[1].lines[0]).toMatchObject({ at: 13 });
+    expect(files[0].hunks).toHaveLength(2);
+    expect(files[0].hunks[1].lines).toEqual([]);
     expect(files[1].path).toBe("new.md");
+    expect(files[1].hunks[0].lines).toHaveLength(2);
   });
 });

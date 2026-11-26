@@ -41,7 +41,10 @@ describe("reading playback", () => {
     const positions = seen.map(([, at]) => at);
     expect(positions.every((at, i) => i === 0 || at >= positions[i - 1])).toBe(true);
     expect([...new Set(seen.map(([path]) => path))]).toEqual(["a.ts", "b.ts", "c.ts"]);
-    expect(s.reader).toMatchObject({ reviewId: "r", mode: "diff", path: "c.ts", from: 201, to: 300 });
+    // Once reading is done the frame clears (the view keeps its place, no lingering "reading").
+    expect(s.reader).toBeNull();
+    expect(seen[seen.length - 1][0]).toBe("c.ts");
+    expect(seen[seen.length - 1][1]).toBeGreaterThanOrEqual(299);
   });
 
   test("a single read plays slowly enough to watch", () => {

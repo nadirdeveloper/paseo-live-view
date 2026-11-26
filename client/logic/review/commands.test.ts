@@ -7,19 +7,20 @@ describe("detectReviewCommand", () => {
       kind: "pr-diff",
       pr: "https://github.com/o/r/pull/12",
       redirect: null,
+      shown: true,
     });
   });
 
   test("gh pr diff redirected to a file", () => {
-    expect(detectReviewCommand("gh pr diff 12 --color=never > /tmp/pr.diff")).toEqual({ kind: "pr-diff", pr: "12", redirect: "/tmp/pr.diff" });
+    expect(detectReviewCommand("gh pr diff 12 --color=never > /tmp/pr.diff")).toEqual({ kind: "pr-diff", pr: "12", redirect: "/tmp/pr.diff", shown: false });
   });
 
   test("gh pr diff through tee", () => {
-    expect(detectReviewCommand("gh pr diff 12 | tee d.txt")).toEqual({ kind: "pr-diff", pr: "12", redirect: "d.txt" });
+    expect(detectReviewCommand("gh pr diff 12 | tee d.txt")).toEqual({ kind: "pr-diff", pr: "12", redirect: "d.txt", shown: true });
   });
 
   test("gh pr diff with a repo flag and no number", () => {
-    expect(detectReviewCommand("cd x && gh pr diff --repo o/r")).toEqual({ kind: "pr-diff", pr: null, redirect: null });
+    expect(detectReviewCommand("cd x && gh pr diff --repo o/r")).toEqual({ kind: "pr-diff", pr: null, redirect: null, shown: true });
   });
 
   test("gh pr diff piped through grep is not the diff", () => {
@@ -38,6 +39,17 @@ describe("detectReviewCommand", () => {
       path: "src/a.ts",
       ref: "abc",
     });
+  });
+
+  test("file fetches only count when gh api is the command and the decoded file is the output", () => {
+    // Text inside a heredoc isn't a command.
+    expect(detectReviewCommand("cat > t.ts <<'EOF'\ngh api \"repos/o/r/contents/src/big.ts?ref=x\" --jq .content | base64 -d\nEOF")).toBeNull();
+    // Shell variables can't be resolved.
+    expect(detectReviewCommand('for f in a b; do gh api "repos/o/r/contents/$f?ref=x" --jq .content | base64 -d; done')).toBeNull();
+    // Filtered output isn't the file.
+    expect(detectReviewCommand('gh api "repos/o/r/contents/amplify.yml?ref=x" --jq .content | base64 -d | grep env')).toBeNull();
+    // A loop body with a literal path still counts.
+    expect(detectReviewCommand('cd x && gh api "repos/o/r/contents/src/a.ts" --jq .content | base64 --decode')).toMatchObject({ kind: "file-at-head", path: "src/a.ts", ref: null });
   });
 
   test("reads of a file", () => {

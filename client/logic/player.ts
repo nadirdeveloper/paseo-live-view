@@ -10,6 +10,8 @@ export type EditorFrame = {
   cursor: number | null;
   highlight: { startLine: number; endLine: number } | null;
   note: string | null;
+  /** Line to keep in view when there is no cursor (e.g. reading a file top to bottom). */
+  focusLine?: number | null;
 };
 
 export type TerminalEntry = {
@@ -306,7 +308,7 @@ function render(s: PlayerState, pb: Playback): PlayerState {
   const withEditor = (frame: EditorFrame) => (sameFrame(s.editor, frame) ? s : { ...s, editor: frame });
   if (script.kind === "read") {
     const step = script.steps[Math.min(pb.step, script.steps.length - 1)];
-    const cursorAt = phase === "read" ? Math.min(step.to, step.from + Math.floor(progress)) : null;
+    const cursorAt = phase === "read" ? Math.min(step.to, step.from + Math.floor(progress)) : phase === "done" ? step.to : null;
     const frame: ReaderFrame = { reviewId: script.reviewId, mode: script.mode, path: step.path, from: step.from, to: step.to, cursorAt };
     const same =
       s.reader &&
@@ -367,6 +369,9 @@ function startNext(s: PlayerState): PlayerState {
 
 function finish(s: PlayerState): PlayerState {
   const pb = s.current!;
+  if (pb.script.kind === "read") {
+    return { ...s, reader: null, current: null, done: keepLast([...s.done, slim(pb.item.event)]) };
+  }
   const rendered = render(s, { ...pb, phase: "done" });
   return { ...rendered, current: null, done: keepLast([...s.done, slim(pb.item.event)]) };
 }

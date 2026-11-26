@@ -32,17 +32,23 @@ export function parseUnifiedDiff(lines: (string | undefined)[]): DiffFile[] {
   let hunk: DiffHunk | null = null;
   let oldNo: number | null = null;
   let newNo: number | null = null;
+  // After a gap we can't tell which file the following lines belong to (the next file's header
+  // may be inside the gap), so nothing is attributed until the next "diff --git" line.
+  let lost = false;
 
   for (let i = 0; i < lines.length; i++) {
     const at = i + 1;
     const line = lines[i];
     if (line === undefined) {
-      // A gap: we no longer know the numbering inside this hunk.
+      lost = true;
+      hunk = null;
       oldNo = null;
       newNo = null;
       continue;
     }
+    if (lost && !line.startsWith("diff --git ")) continue;
     if (line.startsWith("diff --git ")) {
+      lost = false;
       const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
       file = {
         path: match ? match[2] : line.slice(11),

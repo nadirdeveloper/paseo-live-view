@@ -2,7 +2,7 @@ import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import { useAgent, useAgents, usePaseo, useRpc, useWorkspace } from "@getpaseo/plugin/client";
 import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { filesListRpc, filesReadRpc, type FilesReadOutput } from "../shared/files";
-import { emptyLog, toLiveEvent, upsertEvent, type EventLog, type LiveEvent } from "./logic/events";
+import { emptyLog, forLog, toLiveEvent, upsertEvent, type EventLog, type LiveEvent } from "./logic/events";
 import { buildTree, type TreeNode } from "./logic/fileTree";
 import type { Speed } from "./logic/pacing";
 import { applyToReview, emptyReview, setMode as setReviewMode, type ReviewEffect, type ReviewState } from "./logic/review/state";
@@ -42,12 +42,15 @@ export type LiveFeed = {
   setSpeed(speed: Speed): void;
   skipToLive(): void;
   review: ReviewState;
-  thoughts: ThoughtLane;
+  /** The thinking strip reads this on its own, so its typing doesn't re-render the whole panel. */
+  thoughts: ThoughtStore;
   setMode(mode: "code" | "review"): void;
   /** Used by AgentFollower. */
   ingest(agent: AgentInfo, entries: TimelineEntry[], mode: "history" | "live"): void;
   resetAgent(agentId: string): void;
 };
+
+export type ThoughtStore = { get(): ThoughtLane; subscribe(listener: () => void): () => void };
 
 export function useLiveFeed(workspaceId: string): LiveFeed {
   const workspaceDir = useWorkspace(workspaceId, (w) => w.directory);
@@ -67,7 +70,19 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   const reviewRef = useRef<ReviewState>(emptyReview);
   const [review, setReview] = useState<ReviewState>(emptyReview);
   const laneRef = useRef<ThoughtLane>(emptyLane);
-  const [thoughts, setThoughts] = useState<ThoughtLane>(emptyLane);
+  const laneListeners = useRef(new Set<() => void>()).current;
+  const thoughts = useMemo<ThoughtStore>(
+    () => ({
+      get: () => laneRef.current,
+      subscribe: (listener) => {
+        laneListeners.add(listener);
+        return () => laneListeners.delete(listener);
+      },
+    }),
+    [laneListeners],
+  );
+  /** Thoughts already shown, by key + text (they stay out of the event log). */
+  const seenThoughts = useRef(new Set<string>());
 
   const updateReview = useCallback((next: ReviewState) => {
     if (next === reviewRef.current) return;
@@ -77,8 +92,8 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   const updateLane = useCallback((next: ThoughtLane) => {
     if (next === laneRef.current) return;
     laneRef.current = next;
-    setThoughts(next);
-  }, []);
+    for (const listener of laneListeners) listener();
+  }, [laneListeners]);
 
   /** Ticks only re-render when something on screen changes; other updates always do. */
   const update = useCallback((change: (s: PlayerState) => PlayerState, fromTick = false) => {
@@ -94,6 +109,7 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
     playerRef.current = createPlayer();
     logRef.current = emptyLog;
     seenRef.current = new Set();
+    seenThoughts.current = new Set();
     setPlayer(playerRef.current);
     updateReview(emptyReview);
     updateLane(emptyLane);
@@ -160,18 +176,24 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
           seq: entry.seq,
         });
         if (!ev) continue;
-        const { log, change } = upsertEvent(logRef.current, ev);
-        logRef.current = log;
-        if (change === "none") continue;
-
-        // Review mode and the thinking strip see every event; only live ones animate.
-        const reviewed = applyToReview(reviewRef.current, ev);
-        updateReview(reviewed.state);
         if (ev.kind === "thought") {
+          // Pieces of a message can repeat a key, so dedupe on key + text instead of the log.
+          const id = `${ev.key}|${ev.text}`;
+          if (seenThoughts.current.has(id)) continue;
+          seenThoughts.current.add(id);
+          updateReview(applyToReview(reviewRef.current, ev).state);
           updateLane(addThought(laneRef.current, ev, { instant: mode === "history" }));
           continue;
         }
-        updateLane(interrupt(laneRef.current));
+        // The log only needs a small copy for dedupe; review mode gets the full event below.
+        const { log, change } = upsertEvent(logRef.current, forLog(ev));
+        logRef.current = log;
+        if (change === "none") continue;
+
+        // Review mode sees every event; only live ones animate.
+        const reviewed = applyToReview(reviewRef.current, ev);
+        updateReview(reviewed.state);
+        updateLane(interrupt(laneRef.current, ev.agentId));
         if (mode === "live") {
           for (const effect of reviewed.effects) {
             if (effect.kind === "switch") continue;

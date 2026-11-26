@@ -192,6 +192,13 @@ export function toLiveEvent(item: AgentTimelineItem, ctx: EventContext): LiveEve
 }
 
 /** Same content, ignoring when it was seen (history and live copies differ only in `at`). */
+/** A small copy for the dedupe log: big payloads only matter while review mode applies them. */
+export function forLog(ev: LiveEvent): LiveEvent {
+  if (ev.kind === "shell" && ev.rawOutput !== undefined) return { ...ev, rawOutput: undefined };
+  if (ev.kind === "read" && ev.content) return { ...ev, content: "" };
+  return ev;
+}
+
 function sameEvent(a: LiveEvent, b: LiveEvent): boolean {
   return JSON.stringify({ ...a, at: "" }) === JSON.stringify({ ...b, at: "" });
 }

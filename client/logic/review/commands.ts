@@ -3,7 +3,8 @@
 export type ReadRange = { from: number; to: number | null } | { tail: number };
 
 export type ReviewCommand =
-  | { kind: "pr-diff"; pr: string | null; redirect: string | null }
+  /** shown: the agent saw the output (no redirect, or tee); readAfter: a read of the redirect later in the same command line. */
+  | { kind: "pr-diff"; pr: string | null; redirect: string | null; shown: boolean; readAfter?: ReadRange }
   | { kind: "pr-view"; pr: string | null }
   | { kind: "file-at-head"; repo: string; path: string; ref: string | null }
   | { kind: "read-linked"; path: string; range: ReadRange };
@@ -117,13 +118,15 @@ function detectPrDiff(ws: string[]): ReviewCommand | null {
   const { args, target } = redirectTarget(first.slice(3));
   if (args.includes("--name-only") || args.includes("--stat")) return null;
   let redirect = target;
+  let shown = target === null;
   for (const stage of parts.slice(1)) {
     // Only `tee <file>` keeps the output a diff; anything else (grep, head…) changes it.
     if (stage[0] !== "tee") return null;
     const file = stage.slice(1).find((a) => !a.startsWith("-"));
     if (file) redirect = file;
+    shown = true;
   }
-  return { kind: "pr-diff", pr: prArgument(args), redirect };
+  return { kind: "pr-diff", pr: prArgument(args), redirect, shown };
 }
 
 function detectPrView(ws: string[]): ReviewCommand | null {
@@ -135,9 +138,17 @@ function detectPrView(ws: string[]): ReviewCommand | null {
 }
 
 function detectFileAtHead(statement: string): ReviewCommand | null {
-  if (!/\bgh\s+api\b/.test(statement) || !/base64\s+(-d|--decode|-D)\b/.test(statement)) return null;
-  const match = /repos\/([^/\s"']+\/[^/\s"']+)\/contents\/([^"'?\s]+)(?:\?ref=([^"'\s&]+))?/.exec(statement);
-  if (!match) return null;
+  // Only a real `gh api …contents… | base64 -d` statement, where the decoded file is the output.
+  if (statement.includes("\n")) return null; // heredocs and multi-line scripts carry text, not commands
+  const parts = stages(words(statement));
+  const first = parts[0];
+  const start = first[0] === "do" || first[0] === "then" ? 1 : 0;
+  if (first[start] !== "gh" || first[start + 1] !== "api") return null;
+  const last = parts[parts.length - 1];
+  if (parts.length < 2 || last[0] !== "base64" || !last.some((a) => a === "-d" || a === "--decode" || a === "-D")) return null;
+  const endpoint = first.slice(start + 2).find((a) => a.includes("/contents/"));
+  const match = endpoint ? /repos\/([^/\s]+\/[^/\s]+)\/contents\/([^?\s]+)(?:\?ref=([^\s&]+))?/.exec(endpoint) : null;
+  if (!match || match[0].includes("$")) return null;
   return { kind: "file-at-head", repo: match[1], path: decodeURIComponent(match[2]), ref: match[3] ?? null };
 }
 
@@ -171,14 +182,28 @@ function detectRead(ws: string[]): ReviewCommand | null {
   return null;
 }
 
+/** Remove heredoc bodies (`<<'EOF' … EOF`): they are text fed to a command, not commands. */
+function stripHeredocs(command: string): string {
+  return command.replace(/<<-?\s*(['"]?)(\w+)\1[^\n]*\n[\s\S]*?\n\s*\2\s*(?=\n|$)/g, "<<heredoc");
+}
+
 export function detectReviewCommand(command: string): ReviewCommand | null {
-  for (const statement of statements(command)) {
-    const ws = words(statement);
-    const found = detectPrDiff(ws) ?? detectPrView(ws) ?? detectFileAtHead(statement);
-    if (found) return found;
+  const list = statements(stripHeredocs(command));
+  for (let i = 0; i < list.length; i++) {
+    const ws = words(list[i]);
+    const found = detectPrDiff(ws) ?? detectPrView(ws) ?? detectFileAtHead(list[i]);
+    if (!found) continue;
+    // `gh pr diff > f && head -n 300 f`: the output the agent saw is that read of f.
+    if (found.kind === "pr-diff" && found.redirect && !found.shown) {
+      for (const later of list.slice(i + 1)) {
+        const read = detectRead(words(later));
+        if (read?.kind === "read-linked" && read.path === found.redirect) return { ...found, readAfter: read.range };
+      }
+    }
+    return found;
   }
   // A plain read is only meaningful as the whole (last) statement, e.g. `cd x && sed -n '1,9p' f`.
-  const all = statements(command);
+  const all = statements(stripHeredocs(command));
   return all.length > 0 ? detectRead(words(all[all.length - 1])) : null;
 }
 

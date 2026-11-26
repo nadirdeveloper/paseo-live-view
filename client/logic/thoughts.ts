@@ -1,11 +1,15 @@
 import type { ThoughtEvent } from "./events";
 
-/** The thinking strip: the agent's latest thoughts and messages, typed out as they arrive. */
+/**
+ * The thinking strip: the agent's latest thoughts and messages, typed out as they arrive.
+ * Paseo streams both reasoning and messages in pieces, sometimes sharing one key, sometimes one
+ * key per piece; a later full copy (history) can also arrive. All of these join into one thought.
+ */
 
 export type Thought = { key: string; agentId: string; agentLabel: string; source: "reasoning" | "message"; text: string; shown: number };
 export type ThoughtLane = {
   items: Thought[];
-  /** Agent whose last item was reasoning with nothing else since (so a new piece joins it). */
+  /** `${agentId}:${source}` of the newest thought while nothing else has happened for that agent. */
   openRun: string | null;
 };
 
@@ -18,30 +22,25 @@ function finishAll(items: Thought[]): Thought[] {
   return items.map((t) => (t.shown === t.text.length ? t : { ...t, shown: t.text.length }));
 }
 
+/** A full copy replaces what we have; a piece is appended. */
+function combine(current: string, incoming: string): string {
+  if (incoming.startsWith(current)) return incoming;
+  if (current.startsWith(incoming)) return current;
+  return current + incoming;
+}
+
 export function addThought(l: ThoughtLane, ev: ThoughtEvent, opts: { instant: boolean }): ThoughtLane {
-  const openRun = ev.source === "reasoning" ? ev.agentId : null;
+  const run = `${ev.agentId}:${ev.source}`;
   const same = l.items.findIndex((t) => t.key === ev.key);
-  if (same !== -1) {
-    const items = l.items.slice();
-    const text = ev.text;
-    items[same] = { ...items[same], text, shown: opts.instant ? text.length : Math.min(items[same].shown, text.length) };
-    return { items, openRun };
-  }
   const newest = l.items[l.items.length - 1];
-  if (newest && newest.agentId === ev.agentId && newest.source === ev.source) {
-    // A growing snapshot of the newest thought.
-    if (ev.text.startsWith(newest.text)) {
-      const items = l.items.slice(0, -1);
-      items.push({ ...newest, key: ev.key, text: ev.text, shown: opts.instant ? ev.text.length : newest.shown });
-      return { items, openRun };
-    }
-    // The next piece of the same run of reasoning.
-    if (ev.source === "reasoning" && l.openRun === ev.agentId) {
-      const items = l.items.slice(0, -1);
-      const text = newest.text + ev.text;
-      items.push({ ...newest, key: ev.key, text, shown: opts.instant ? text.length : newest.shown });
-      return { items, openRun };
-    }
+  const joins = same !== -1 || (newest && newest.agentId === ev.agentId && newest.source === ev.source && (l.openRun === run || ev.text.startsWith(newest.text)));
+  if (joins) {
+    const index = same !== -1 ? same : l.items.length - 1;
+    const target = l.items[index];
+    const text = combine(target.text, ev.text);
+    const items = l.items.slice();
+    items[index] = { ...target, key: ev.key, text, shown: opts.instant ? text.length : Math.min(target.shown, text.length) };
+    return { items, openRun: run };
   }
   const thought: Thought = {
     key: ev.key,
@@ -51,12 +50,14 @@ export function addThought(l: ThoughtLane, ev: ThoughtEvent, opts: { instant: bo
     text: ev.text,
     shown: opts.instant ? ev.text.length : 0,
   };
-  return { items: [...finishAll(l.items), thought].slice(-MAX_THOUGHTS), openRun };
+  return { items: [...finishAll(l.items), thought].slice(-MAX_THOUGHTS), openRun: run };
 }
 
-/** Something else happened (a tool call, a message): the next reasoning starts a new thought. */
-export function interrupt(l: ThoughtLane): ThoughtLane {
-  return l.openRun === null ? l : { ...l, openRun: null };
+/** Something else happened for `agentId` (or anyone, when omitted): its next thought starts fresh. */
+export function interrupt(l: ThoughtLane, agentId?: string): ThoughtLane {
+  if (l.openRun === null) return l;
+  if (agentId !== undefined && !l.openRun.startsWith(`${agentId}:`)) return l;
+  return { ...l, openRun: null };
 }
 
 export function tickThoughts(l: ThoughtLane, dtMs: number): ThoughtLane {

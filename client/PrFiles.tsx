@@ -21,6 +21,7 @@ export const PrFiles = memo(function PrFiles({ theme, review, findings, activePa
   const seen = new Set(review.files.map((f) => f.path));
   const notRead = (review.allFiles ?? []).filter((f) => !seen.has(f.path));
   const outside = [...new Set(findings.flatMap((p) => (p.placement.kind === "outside" ? [p.placement.path] : [])))];
+  const listed = findings.filter((p) => p.placement.kind === "listed");
 
   const heading = (text: string) => (
     <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, letterSpacing: 0.5, paddingHorizontal: 10, paddingTop: 10, paddingBottom: 4 }}>
@@ -76,6 +77,12 @@ export const PrFiles = memo(function PrFiles({ theme, review, findings, activePa
       {notRead.map((f) => (
         <Text key={f.path} numberOfLines={1} style={{ color: theme.colors.foregroundMuted, fontSize: 12, paddingHorizontal: 10, paddingVertical: 3 }}>
           {f.path}  +{f.adds} −{f.dels}
+        </Text>
+      ))}
+      {listed.length > 0 ? heading("FINDINGS WITHOUT A LINE") : null}
+      {listed.map((p) => (
+        <Text key={p.finding.n} numberOfLines={2} style={{ color: theme.colors.foreground, fontSize: 12, paddingHorizontal: 10, paddingVertical: 3 }}>
+          <Text style={{ color: severityColor(p.finding.severity, theme) }}>● </Text>#{p.finding.n} {p.finding.text}
         </Text>
       ))}
       {outside.length > 0 ? heading("OUTSIDE THIS PR") : null}

@@ -1,7 +1,7 @@
 import { Icon } from "@getpaseo/plugin/client/ui";
-import { memo, useContext, useRef } from "react";
+import { memo, useContext, useRef, useState } from "react";
 import { PointerContext } from "./PointerLayer";
-import { ScrollView, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
+import { Pressable, ScrollView, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import type { TerminalEntry } from "./logic/player";
 import { MONO, baseName, type Theme } from "./style";
 
@@ -60,24 +60,39 @@ const TerminalRow = memo(function TerminalRow({ theme, entry }: { theme: Theme; 
         );
 });
 
-export function TerminalView({ theme, entries }: Props) {
+export const TerminalView = memo(function TerminalView({ theme, entries }: Props) {
   const scrollRef = useRef<ScrollView>(null);
-  const atBottom = useRef(true);
+  // Follow new output until the user scrolls up; growing content alone never turns following off.
+  const sticky = useRef(true);
+  const lastY = useRef(0);
+  const [following, setFollowing] = useState(true);
 
   const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
-    atBottom.current = contentOffset.y + layoutMeasurement.height >= contentSize.height - 24;
+    const fromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    const movedUp = contentOffset.y < lastY.current - 2;
+    lastY.current = contentOffset.y;
+    if (fromBottom <= 40) sticky.current = true;
+    else if (movedUp) sticky.current = false;
+    if (sticky.current !== following) setFollowing(sticky.current);
+  };
+
+  const jumpToEnd = () => {
+    sticky.current = true;
+    setFollowing(true);
+    scrollRef.current?.scrollToEnd({ animated: false });
   };
 
   return (
+    <View style={{ flex: 1 }}>
     <ScrollView
       ref={scrollRef}
       style={{ flex: 1, backgroundColor: theme.colors.surface0 }}
       contentContainerStyle={{ padding: 10, gap: 10 }}
       onScroll={onScroll}
-      scrollEventThrottle={100}
+      scrollEventThrottle={32}
       onContentSizeChange={() => {
-        if (atBottom.current) scrollRef.current?.scrollToEnd({ animated: false });
+        if (sticky.current) scrollRef.current?.scrollToEnd({ animated: false });
       }}
     >
       {entries.length === 0 ? (
@@ -92,5 +107,24 @@ export function TerminalView({ theme, entries }: Props) {
         <TerminalRow key={entry.key} theme={theme} entry={entry} />
       ))}
     </ScrollView>
+    {!following ? (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Jump to the latest command"
+        onPress={jumpToEnd}
+        style={{
+          position: "absolute",
+          right: 12,
+          bottom: 10,
+          paddingHorizontal: 10,
+          paddingVertical: 5,
+          borderRadius: 12,
+          backgroundColor: theme.colors.accent,
+        }}
+      >
+        <Text style={{ color: theme.colors.accentForeground, fontSize: 11 }}>↓ latest</Text>
+      </Pressable>
+    ) : null}
+    </View>
   );
-}
+});

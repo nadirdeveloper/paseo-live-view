@@ -157,7 +157,7 @@ export const EditorView = memo(function EditorView({ theme, compact, frame, manu
   const cursorLine = cursor === null ? null : lineOf(text, cursor);
   const cursorColumn = cursor === null ? 0 : cursor - (text.lastIndexOf("\n", cursor - 1) + 1);
   // A file you opened yourself shows from the top; while following, a window around the change.
-  const focus = manual ? null : cursorLine ?? highlight?.startLine ?? 1;
+  const focus = manual ? null : cursorLine ?? frame?.focusLine ?? highlight?.startLine ?? 1;
   const [extra, setExtra] = useState({ above: 0, below: 0 });
   useEffect(() => setExtra({ above: 0, below: 0 }), [path, manual !== null]);
   const { first, last } = visibleWindow({
@@ -212,7 +212,7 @@ export const EditorView = memo(function EditorView({ theme, compact, frame, manu
         caret={hasCursor ? clipped.cursorColumn ?? 0 : null}
         lit={highlight !== null && n >= highlight.startLine && n <= highlight.endLine}
         gutterWidth={gutterWidth}
-        pointerLine={n === (cursorLine ?? highlight?.startLine ?? -1)}
+        pointerLine={n === (cursorLine ?? frame?.focusLine ?? highlight?.startLine ?? -1)}
         styles={styles}
       />,
     );

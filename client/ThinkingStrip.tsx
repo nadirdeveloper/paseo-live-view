@@ -1,14 +1,16 @@
 import { Icon } from "@getpaseo/plugin/client/ui";
-import { memo, useState } from "react";
+import { memo, useRef, useState, useSyncExternalStore } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import type { ThoughtLane } from "./logic/thoughts";
 import type { Theme } from "./style";
+import type { ThoughtStore } from "./useLiveFeed";
 
-type Props = { theme: Theme; lane: ThoughtLane; fill?: boolean };
+type Props = { theme: Theme; store: ThoughtStore; fill?: boolean; height?: number };
 
 /** The agent's latest thinking and messages, typed out as they stream. */
-export const ThinkingStrip = memo(function ThinkingStrip({ theme, lane, fill = false }: Props) {
+export const ThinkingStrip = memo(function ThinkingStrip({ theme, store, fill = false, height = 96 }: Props) {
+  const lane = useSyncExternalStore(store.subscribe, store.get, store.get);
   const [open, setOpen] = useState(true);
+  const scrollRef = useRef<ScrollView>(null);
   const items = lane.items;
   const newest = items[items.length - 1];
   const typing = newest && newest.shown < newest.text.length;
@@ -27,7 +29,13 @@ export const ThinkingStrip = memo(function ThinkingStrip({ theme, lane, fill = f
         <Text style={{ color: theme.colors.foregroundMuted, fontSize: 10 }}>{open ? "▾" : "▸"}</Text>
       </Pressable>
       {open && items.length > 0 ? (
-        <ScrollView style={{ maxHeight: fill ? undefined : 96 }} contentContainerStyle={{ paddingHorizontal: 10, paddingBottom: 6, gap: 4 }}>
+        <ScrollView
+          ref={scrollRef}
+          style={{ maxHeight: fill ? undefined : height }}
+          contentContainerStyle={{ paddingHorizontal: 10, paddingBottom: 6, gap: 4 }}
+          // Keep the line being typed in view.
+          onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
+        >
           {items.map((t, i) => {
             const isNewest = i === items.length - 1;
             const reasoning = t.source === "reasoning";
