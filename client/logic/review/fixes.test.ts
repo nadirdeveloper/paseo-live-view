@@ -126,10 +126,10 @@ describe("log copies are small (review #9)", () => {
 describe("which mode to show (review #8)", () => {
   test("follows what is playing, unless the user picked", () => {
     const state = { ...emptyReview, mode: "review" as const };
-    expect(displayMode(state, "text", "review")).toBe("code");
-    expect(displayMode(state, "read", "code")).toBe("review");
-    expect(displayMode(state, null, "code")).toBe("code");
-    expect(displayMode({ ...state, manual: true, mode: "review" }, "text", "code")).toBe("review");
-    expect(displayMode(state, null, null)).toBe("review");
+    expect(displayMode(state, "text", "k1", "review")).toBe("code");
+    expect(displayMode(state, "read", "k2", "code")).toBe("review");
+    expect(displayMode(state, null, "k2", "code")).toBe("code");
+    expect(displayMode({ ...state, manual: true, manualKey: "k1", mode: "review" }, "text", "k1", "code")).toBe("review");
+    expect(displayMode(state, null, null, null)).toBe("review");
   });
 });

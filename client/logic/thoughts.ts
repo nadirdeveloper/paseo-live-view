@@ -15,7 +15,30 @@ export type ThoughtLane = {
 
 export const emptyLane: ThoughtLane = { items: [], openRun: null };
 
-const MAX_THOUGHTS = 3;
+const MAX_THOUGHTS = 6;
+const SUMMARY_CHARS = 140;
+
+/**
+ * One short plain line for the thinking strip: code blocks, tables and markdown removed, the first
+ * heading or sentence kept, long text cut at a word.
+ */
+export function summarizeThought(text: string): string {
+  const withoutBlocks = text.replace(/```[\s\S]*?(```|$)/g, "\n");
+  const lines = withoutBlocks
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("|") && !/^[-*_]{3,}$/.test(l));
+  const first = (lines[0] ?? "")
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^[-*+]\s+|^\d+\.\s+/, "")
+    .replace(/\*\*|__|`/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1");
+  const sentence = /^(.+?[.!?])(\s|$)/.exec(first);
+  const plain = sentence ? sentence[1] : first;
+  if (plain.length <= SUMMARY_CHARS) return plain;
+  const cut = plain.slice(0, SUMMARY_CHARS);
+  return cut.slice(0, cut.lastIndexOf(" ") > 40 ? cut.lastIndexOf(" ") : SUMMARY_CHARS) + "…";
+}
 const CHARS_PER_SEC = 150;
 
 function finishAll(items: Thought[]): Thought[] {

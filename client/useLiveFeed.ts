@@ -44,7 +44,8 @@ export type LiveFeed = {
   review: ReviewState;
   /** The thinking strip reads this on its own, so its typing doesn't re-render the whole panel. */
   thoughts: ThoughtStore;
-  setMode(mode: "code" | "review"): void;
+  /** `lastStartedKey`: the playback that had last started, so the pick lasts until a new one starts. */
+  setMode(mode: "code" | "review", lastStartedKey: string | null): void;
   /** Used by AgentFollower. */
   ingest(agent: AgentInfo, entries: TimelineEntry[], mode: "history" | "live"): void;
   resetAgent(agentId: string): void;
@@ -211,6 +212,8 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
           continue;
         }
 
+        // A command can start before its text arrives; wait for the update that carries it.
+        if (ev.kind === "shell" && !ev.command && ev.status === "running") continue;
         const isFile = ev.kind === "edit" || ev.kind === "write";
         if (isFile && ev.inWorkspace && !knownPaths.current.has(ev.filePath)) refreshFiles();
 
@@ -266,7 +269,8 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
       skipToLive: () => update(skipPlayer),
       review,
       thoughts,
-      setMode: (mode: "code" | "review") => updateReview(setReviewMode(reviewRef.current, mode)),
+      setMode: (mode: "code" | "review", lastStartedKey: string | null) =>
+        updateReview(setReviewMode(reviewRef.current, mode, lastStartedKey)),
       ingest,
       resetAgent,
     }),

@@ -28,6 +28,8 @@ export type ReviewState = {
   mode: "code" | "review";
   /** The user picked a mode with the switch; automatic switching waits for the next review. */
   manual: boolean;
+  /** The playback that had last started when the user picked; the pick lasts until a new one starts. */
+  manualKey: string | null;
   activeId: string | null;
 };
 
@@ -44,6 +46,7 @@ export const emptyReview: ReviewState = {
   buffers: new Map(),
   mode: "code",
   manual: false,
+  manualKey: null,
   activeId: null,
 };
 
@@ -267,6 +270,6 @@ export function applyToReview(s: ReviewState, ev: LiveEvent): { state: ReviewSta
   return { state, effects };
 }
 
-export function setMode(s: ReviewState, mode: "code" | "review"): ReviewState {
-  return { ...s, mode, manual: true };
+export function setMode(s: ReviewState, mode: "code" | "review", lastStartedKey: string | null = null): ReviewState {
+  return { ...s, mode, manual: true, manualKey: lastStartedKey };
 }

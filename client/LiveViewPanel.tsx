@@ -41,11 +41,14 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   // Review mode: the newest review, its findings, and which file is shown.
   const { review: reviewState } = feed;
   // Show what is playing now (a read → Review, an edit → Code), unless the user picked a mode.
-  const playing = currentPhase(player)?.kind ?? null;
+  const phase = currentPhase(player);
+  const playing = phase?.kind ?? null;
   const lastPlayed = useRef<"code" | "review" | null>(null);
+  const lastStartedKey = useRef<string | null>(null);
+  if (phase) lastStartedKey.current = phase.key;
   if (playing === "read") lastPlayed.current = "review";
   else if (playing === "text" || playing === "diff") lastPlayed.current = "code";
-  const mode = displayMode(reviewState, playing, lastPlayed.current);
+  const mode = displayMode(reviewState, playing, lastStartedKey.current, lastPlayed.current);
   const inReview = mode === "review";
   // Resizable panes (px).
   const [treeWidth, setTreeWidth] = useState(240);
@@ -170,7 +173,7 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
     ) : (
       tree
     );
-  const bar = <ReviewBar theme={theme} mode={mode} review={review} onMode={feed.setMode} />;
+  const bar = <ReviewBar theme={theme} mode={mode} review={review} onMode={(m) => feed.setMode(m, lastStartedKey.current)} />;
   const thinking = <ThinkingStrip theme={theme} store={feed.thoughts} height={thinkingHeight} />;
   const terminal = <TerminalView theme={theme} entries={player.terminal} />;
   const controls = (

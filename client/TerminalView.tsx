@@ -48,7 +48,9 @@ const TerminalRow = memo(function TerminalRow({ theme, entry }: { theme: Theme; 
                 {typing ? <Text style={{ color: theme.colors.accent }}>▍</Text> : null}
               </Text>
               {status ? <Text style={{ color: status.color, ...mono, fontSize: 11 }}>{status.text}</Text> : null}
-              <Text style={{ color: theme.colors.foregroundMuted, ...mono, fontSize: 11 }}>{entry.agentLabel}</Text>
+              <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, ...mono, fontSize: 11, maxWidth: 140 }}>
+                {entry.agentLabel}
+              </Text>
             </View>
             {entry.hiddenLines > 0 && entry.shownOutputLines > 0 ? (
               <Text style={{ color: theme.colors.foregroundMuted, ...mono, fontSize: 11 }}>

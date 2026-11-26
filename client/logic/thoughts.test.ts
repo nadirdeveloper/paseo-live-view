@@ -39,12 +39,12 @@ describe("addThought", () => {
     expect(l.items.map((t) => t.source)).toEqual(["reasoning", "message"]);
   });
 
-  test("keeps only the last three", () => {
+  test("keeps only the last six", () => {
     let l = emptyLane;
-    for (const text of ["one", "two", "three", "four"]) {
+    for (const text of ["one", "two", "three", "four", "five", "six", "seven"]) {
       l = addThought(interrupt(l), thought(text), { instant: false });
     }
-    expect(l.items.map((t) => t.text)).toEqual(["two", "three", "four"]);
+    expect(l.items.map((t) => t.text)).toEqual(["two", "three", "four", "five", "six", "seven"]);
   });
 
   test("a new thought finishes the previous one instantly", () => {

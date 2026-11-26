@@ -1,4 +1,5 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
+import { addLivePills } from "./client/livePill";
 import { LiveViewPanel } from "./client/LiveViewPanel";
 
 export default function contribute(client: PluginClientContext) {
@@ -18,5 +19,6 @@ export default function contribute(client: PluginClientContext) {
       openPanel("live-view");
     },
   });
-  return () => {};
+  // A "Live" pill on every agent tab opens this panel.
+  return addLivePills(client);
 }

@@ -640,6 +640,9 @@ export function applyUpdate(s: PlayerState, ev: LiveEvent): PlayerState {
     const output = (ev as ShellEvent).output ?? "";
     terminal = upsertEntry(terminal, {
       ...existing,
+      // The command text can arrive after the call started.
+      command: (ev as ShellEvent).command || existing.command,
+      typedCommand: (ev as ShellEvent).command || existing.typedCommand,
       status: ev.status,
       exitCode: ev.exitCode,
       output,
