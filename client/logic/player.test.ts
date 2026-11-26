@@ -2,7 +2,9 @@ import { describe, expect, test } from "vitest";
 import type { EditEvent, LiveEvent, ShellEvent, SubagentEvent, WriteEvent } from "./events";
 import { effectiveCps, eventChars } from "./pacing";
 import {
+  MAX_DONE,
   applyUpdate,
+  visibleChanged,
   createPlayer,
   enqueue,
   seedHistory,
@@ -119,6 +121,11 @@ describe("edit replay frames", () => {
     expect(s.editor).toMatchObject({ text: "NEW", note: "file has changed since" });
   });
 
+  test("an edit whose new text appears twice says it can't place it", () => {
+    const s = run(enqueue(createPlayer(), edit("y\nfoo\ny", "x = 1", "y")), 5000);
+    expect(s.editor).toMatchObject({ text: "y", note: "this text appears more than once; exact spot unknown" });
+  });
+
   test("an edit with no snapshot says the content is unavailable", () => {
     const s = run(enqueue(createPlayer(), edit(null as unknown as string, "OLD", "NEW")), 5000);
     expect(s.editor?.note).toBe("file content unavailable");
@@ -164,6 +171,39 @@ describe("terminal", () => {
     s = tick(s, 10);
     expect(s.terminal.map((e) => e.kind)).toEqual(["failed-edit", "subagent"]);
     expect(s.terminal[0].command).toBe("/w/bad.js");
+  });
+});
+
+describe("efficiency", () => {
+  test("ticking with 20 queued edits on large files stays cheap", () => {
+    const big = Array.from({ length: 16000 }, (_, i) => `line number ${i} with some text`).join("\n");
+    let s = createPlayer();
+    for (let i = 0; i < 20; i++) s = enqueue(s, edit(big, "OLD", `line number ${i * 700} with some text`));
+    const start = performance.now();
+    for (let i = 0; i < 20; i++) s = tick(s, 50);
+    expect((performance.now() - start) / 20).toBeLessThan(5);
+  });
+
+  test("finished events drop their file snapshots", () => {
+    const s = run(enqueue(createPlayer(), edit("a\nNEW", "OLD", "NEW")), 5000);
+    const done = s.done[0];
+    expect(done.kind === "edit" && done.afterText).toBeFalsy();
+  });
+
+  test("finished events and terminal entries are capped", () => {
+    const events = Array.from({ length: MAX_DONE + 50 }, (_, i) => shell(`c${i}`, "x"));
+    const s = seedHistory(createPlayer(), events);
+    expect(s.done).toHaveLength(MAX_DONE);
+    expect(s.terminal).toHaveLength(MAX_DONE);
+    expect(s.terminal[s.terminal.length - 1].command).toBe(`c${MAX_DONE + 49}`);
+  });
+
+  test("a tick in the middle of a pause changes nothing visible", () => {
+    let s = enqueue(createPlayer(), edit("a\nNEW TEXT\nc", "OLD", "NEW TEXT"));
+    s = tick(s, 50);
+    const next = tick(s, 50);
+    expect(visibleChanged(s, next)).toBe(false);
+    expect(visibleChanged(next, run(next, 2000))).toBe(true);
   });
 });
 

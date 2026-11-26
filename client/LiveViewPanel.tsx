@@ -1,5 +1,5 @@
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Controls } from "./Controls";
 import { EditorView, type ManualView } from "./EditorView";
@@ -24,18 +24,26 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   const [manual, setManual] = useState<ManualView | null>(null);
   const [pane, setPane] = useState<Pane>("editor");
 
+  // Read the latest values through refs so openFile keeps one identity and FileTree can skip renders.
+  const doneRef = useRef(player.done);
+  doneRef.current = player.done;
+  const readFileRef = useRef(feed.readFile);
+  readFileRef.current = feed.readFile;
+  const compactRef = useRef(compact);
+  compactRef.current = compact;
+
   const openFile = useCallback(
     async (path: string) => {
       setFollow(false);
       setManual({ path, text: null, message: "Loading…" });
-      if (compact) setPane("editor");
-      const outsideEvent = player.done.find((e) => (e.kind === "edit" || e.kind === "write") && e.filePath === path && !e.inWorkspace);
+      if (compactRef.current) setPane("editor");
+      const outsideEvent = doneRef.current.find((e) => (e.kind === "edit" || e.kind === "write") && e.filePath === path && !e.inWorkspace);
       if (outsideEvent && outsideEvent.kind === "write") {
         setManual({ path, text: outsideEvent.content ?? "", message: "Outside the workspace: shown from the agent's write." });
         return;
       }
       try {
-        const result = await feed.readFile(path);
+        const result = await readFileRef.current(path);
         setManual(
           result.status === "ok" ? { path, text: result.text, message: null } : { path, text: null, message: READ_MESSAGES[result.status] },
         );
@@ -43,7 +51,7 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
         setManual({ path, text: null, message: "Could not read this file." });
       }
     },
-    [compact, feed, player.done],
+    [],
   );
 
   const onFollow = (next: boolean) => {

@@ -19,9 +19,9 @@ describe("reconstructEdit", () => {
     expect(result).toMatchObject({ mode: "replay", startLine: 9 });
   });
 
-  test("with several matches and no hint picks the first", () => {
-    const result = reconstructEdit({ afterText: "NEW\nNEW", oldString: "OLD", newString: "NEW" });
-    expect(result).toMatchObject({ mode: "replay", startLine: 1, offset: 0 });
+  test("with several matches and no hint it can't tell which, so it falls back", () => {
+    const result = reconstructEdit({ afterText: "y\nfoo\ny\n", oldString: "x = 1", newString: "y" });
+    expect(result).toEqual({ mode: "standalone", oldText: "x = 1", newText: "y", reason: "ambiguous" });
   });
 
   test("falls back when the new text is no longer in the file", () => {

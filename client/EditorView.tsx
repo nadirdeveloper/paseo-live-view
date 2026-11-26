@@ -1,11 +1,11 @@
-import { useEffect, useRef } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Pressable, ScrollView, Text, View } from "react-native";
 import type { EditorFrame } from "./logic/player";
+import { clipLine, visibleWindow } from "./logic/view";
 import { MONO, baseName, type Theme } from "./style";
 
-/** Lines rendered on each side of the focus line, so huge files stay smooth. */
-const WINDOW = 60;
 const LINE_HEIGHT = 18;
+const SHOW_MORE = 200;
 
 export type ManualView = { path: string; text: string | null; message: string | null };
 
@@ -28,13 +28,20 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
   const lines = text.split("\n");
   const cursorLine = cursor === null ? null : lineOf(text, cursor);
   const cursorColumn = cursor === null ? 0 : cursor - (text.lastIndexOf("\n", cursor - 1) + 1);
-  const focus = cursorLine ?? highlight?.startLine ?? 1;
-  const first = Math.max(1, focus - WINDOW);
-  const last = Math.min(lines.length, focus + WINDOW);
+  // A file you opened yourself shows from the top; while following, a window around the change.
+  const focus = manual ? null : cursorLine ?? highlight?.startLine ?? 1;
+  const [extra, setExtra] = useState({ above: 0, below: 0 });
+  useEffect(() => setExtra({ above: 0, below: 0 }), [path, manual !== null]);
+  const { first, last } = visibleWindow({
+    lineCount: lines.length,
+    focus,
+    extraAbove: extra.above,
+    extraBelow: extra.below,
+  });
 
   // Keep the focus line in view as the cursor moves.
   useEffect(() => {
-    const y = (focus - first) * LINE_HEIGHT - 4 * LINE_HEIGHT;
+    const y = focus === null ? 0 : (focus - first) * LINE_HEIGHT - 4 * LINE_HEIGHT;
     scrollRef.current?.scrollTo({ y: Math.max(0, y), animated: false });
   }, [focus, first, path]);
 
@@ -51,9 +58,12 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
   const gutterWidth = Math.max(3, String(last).length) * 8 + 12;
   const rows = [];
   for (let n = first; n <= last; n++) {
-    const content = lines[n - 1] ?? "";
     const lit = highlight !== null && n >= highlight.startLine && n <= highlight.endLine;
     const hasCursor = cursorLine === n;
+    // Minified files can be one enormous line; draw only part of it.
+    const clipped = clipLine(lines[n - 1] ?? "", hasCursor ? cursorColumn : null);
+    const content = clipped.text;
+    const column = clipped.cursorColumn ?? 0;
     rows.push(
       <View key={n} style={{ flexDirection: "row", minHeight: LINE_HEIGHT }}>
         {lit ? (
@@ -78,9 +88,9 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
         <Text style={{ flex: 1, color: theme.colors.foreground, fontFamily: MONO, fontSize: 12, lineHeight: LINE_HEIGHT }}>
           {hasCursor ? (
             <>
-              {content.slice(0, cursorColumn)}
+              {content.slice(0, column)}
               <Text style={{ color: theme.colors.accent }}>▍</Text>
-              {content.slice(cursorColumn)}
+              {content.slice(column)}
             </>
           ) : (
             content || " "
@@ -123,15 +133,27 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
       ) : null}
       <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 6 }}>
         {first > 1 ? (
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, paddingLeft: gutterWidth }}>
-            … {first - 1} lines above
-          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Show ${Math.min(SHOW_MORE, first - 1)} more lines above`}
+            onPress={() => setExtra((e) => ({ ...e, above: e.above + SHOW_MORE }))}
+          >
+            <Text style={{ color: theme.colors.accent, fontSize: 11, paddingLeft: gutterWidth, paddingVertical: 2 }}>
+              ↑ {first - 1} lines above · show more
+            </Text>
+          </Pressable>
         ) : null}
         {rows}
         {last < lines.length ? (
-          <Text style={{ color: theme.colors.foregroundMuted, fontSize: 11, paddingLeft: gutterWidth }}>
-            … {lines.length - last} lines below
-          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`Show ${Math.min(SHOW_MORE, lines.length - last)} more lines below`}
+            onPress={() => setExtra((e) => ({ ...e, below: e.below + SHOW_MORE }))}
+          >
+            <Text style={{ color: theme.colors.accent, fontSize: 11, paddingLeft: gutterWidth, paddingVertical: 2 }}>
+              ↓ {lines.length - last} lines below · show more
+            </Text>
+          </Pressable>
         ) : null}
       </ScrollView>
     </View>

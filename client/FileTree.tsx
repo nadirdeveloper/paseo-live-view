@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import type { TreeNode } from "./logic/fileTree";
 import { baseName, type Theme } from "./style";
@@ -19,7 +19,7 @@ function ancestors(path: string, root: string | null): string[] {
   return parts.map((_, i) => `${root}/${parts.slice(0, i + 1).join("/")}`);
 }
 
-export function FileTree({ theme, tree, root, capped, touched, activePath, onSelect }: Props) {
+export const FileTree = memo(function FileTree({ theme, tree, root, capped, touched, activePath, onSelect }: Props) {
   const [open, setOpen] = useState<Set<string>>(new Set());
 
   // Reveal the file the agent is working on.
@@ -116,4 +116,4 @@ export function FileTree({ theme, tree, root, capped, touched, activePath, onSel
       ) : null}
     </ScrollView>
   );
-}
+});

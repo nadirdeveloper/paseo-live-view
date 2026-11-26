@@ -1,7 +1,7 @@
 export type Reconstruction =
   | { mode: "replay"; before: string; offset: number; oldText: string; newText: string; startLine: number }
   | { mode: "diff-only"; after: string; changedLines: number[] }
-  | { mode: "standalone"; oldText: string; newText: string; reason: "not-found" | "no-snapshot" };
+  | { mode: "standalone"; oldText: string; newText: string; reason: "not-found" | "no-snapshot" | "ambiguous" };
 
 export type ReconstructInput = {
   afterText: string | null | undefined;
@@ -56,6 +56,9 @@ export function reconstructEdit(input: ReconstructInput): Reconstruction {
     matches.push(at);
   }
   if (matches.length === 0) return { mode: "standalone", oldText, newText, reason: "not-found" };
+
+  // Several matches and nothing to say which one changed: guessing could show text that never existed.
+  if (matches.length > 1 && hintLine === undefined) return { mode: "standalone", oldText, newText, reason: "ambiguous" };
 
   let offset = matches[0];
   if (hintLine !== undefined && matches.length > 1) {

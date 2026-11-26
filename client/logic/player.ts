@@ -24,7 +24,8 @@ export type TerminalEntry = {
   kind: "shell" | "subagent" | "failed-edit";
 };
 
-type Queued = { event: LiveEvent; enqueuedAt: number };
+/** A waiting event with its replay script and cost prepared once, not on every tick. */
+type Queued = { event: LiveEvent; enqueuedAt: number; script: Script; chars: number; fixedMs: number };
 
 type TextScript = {
   kind: "text";
@@ -61,6 +62,8 @@ const HOLD_MS = 500;
 const BUSY_PAUSE_MS = 100;
 const OUTPUT_LINES_PER_SEC = 100;
 const MAX_DELETE_SEC = 1;
+/** Finished events and terminal entries kept for the panel's lifetime. */
+export const MAX_DONE = 500;
 
 export function createPlayer(): PlayerState {
   return {
@@ -77,6 +80,35 @@ export function createPlayer(): PlayerState {
 }
 
 // ---------- helpers ----------
+
+function keepLast<T>(items: T[]): T[] {
+  return items.length > MAX_DONE ? items.slice(items.length - MAX_DONE) : items;
+}
+
+/** Drop the big file text from a finished event; outside-workspace writes keep their content to view later. */
+function slim(ev: LiveEvent): LiveEvent {
+  if (ev.kind === "edit") return { ...ev, afterText: undefined };
+  if (ev.kind === "write") return { ...ev, afterText: undefined, content: ev.inWorkspace ? undefined : ev.content };
+  return ev;
+}
+
+function sameFrame(a: EditorFrame | null, b: EditorFrame | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.filePath === b.filePath &&
+    a.agentLabel === b.agentLabel &&
+    a.cursor === b.cursor &&
+    a.note === b.note &&
+    a.highlight?.startLine === b.highlight?.startLine &&
+    a.highlight?.endLine === b.highlight?.endLine &&
+    a.text === b.text
+  );
+}
+
+function sameEntry(a: TerminalEntry, b: TerminalEntry): boolean {
+  return (Object.keys(a) as (keyof TerminalEntry)[]).every((k) => a[k] === b[k]) && Object.keys(a).length === Object.keys(b).length;
+}
 
 function lineCount(text: string): number {
   return text === "" ? 0 : text.split("\n").length;
@@ -146,7 +178,12 @@ function buildScript(ev: LiveEvent): Script {
     oldText: rec.oldText,
     newText: rec.newText,
     startLine: 1,
-    note: rec.reason === "no-snapshot" ? "file content unavailable" : "file has changed since",
+    note:
+      rec.reason === "no-snapshot"
+        ? "file content unavailable"
+        : rec.reason === "ambiguous"
+          ? "this text appears more than once; exact spot unknown"
+          : "file has changed since",
     highlightResult: true,
   };
 }
@@ -211,7 +248,8 @@ function terminalEntryFor(ev: LiveEvent, instant: boolean): TerminalEntry | null
 
 function upsertEntry(terminal: TerminalEntry[], entry: TerminalEntry): TerminalEntry[] {
   const index = terminal.findIndex((e) => e.key === entry.key);
-  if (index === -1) return [...terminal, entry];
+  if (index === -1) return keepLast([...terminal, entry]);
+  if (sameEntry(terminal[index], entry)) return terminal;
   const next = terminal.slice();
   next[index] = entry;
   return next;
@@ -244,19 +282,17 @@ function textFrame(script: TextScript, ev: LiveEvent, phase: Phase, progress: nu
 function render(s: PlayerState, pb: Playback): PlayerState {
   const ev = pb.item.event;
   const { script, phase, progress } = pb;
-  if (script.kind === "text") return { ...s, editor: textFrame(script, ev, phase, progress) };
+  const withEditor = (frame: EditorFrame) => (sameFrame(s.editor, frame) ? s : { ...s, editor: frame });
+  if (script.kind === "text") return withEditor(textFrame(script, ev, phase, progress));
   if (script.kind === "diff") {
-    return {
-      ...s,
-      editor: {
-        filePath: script.filePath,
-        agentLabel: ev.agentLabel,
-        text: script.after,
-        cursor: null,
-        highlight: script.highlight,
-        note: null,
-      },
-    };
+    return withEditor({
+      filePath: script.filePath,
+      agentLabel: ev.agentLabel,
+      text: script.after,
+      cursor: null,
+      highlight: script.highlight,
+      note: null,
+    });
   }
   if (script.kind === "shell" && ev.kind === "shell") {
     const output = ev.output ?? "";
@@ -267,14 +303,15 @@ function render(s: PlayerState, pb: Playback): PlayerState {
       shownOutputLines:
         phase === "done" ? lineCount(output) : phase === "output" ? Math.min(lineCount(output), Math.floor(progress)) : 0,
     };
-    return { ...s, terminal: upsertEntry(s.terminal, entry) };
+    const terminal = upsertEntry(s.terminal, entry);
+    return terminal === s.terminal ? s : { ...s, terminal };
   }
   return s;
 }
 
 function startNext(s: PlayerState): PlayerState {
   const [item, ...queue] = s.queue;
-  const script = buildScript(item.event);
+  const script = item.script;
   const pb: Playback = { item, script, phase: firstPhase(script), progress: 0 };
   let next: PlayerState = { ...s, queue, current: pb };
   if (script.kind === "instant") {
@@ -287,7 +324,7 @@ function startNext(s: PlayerState): PlayerState {
 function finish(s: PlayerState): PlayerState {
   const pb = s.current!;
   const rendered = render(s, { ...pb, phase: "done" });
-  return { ...rendered, current: null, done: [...s.done, pb.item.event] };
+  return { ...rendered, current: null, done: keepLast([...s.done, slim(pb.item.event)]) };
 }
 
 function totalForPhase(pb: Playback, busy: boolean, factor = 1): number {
@@ -353,17 +390,8 @@ function remainingWork(s: PlayerState): { chars: number; fixedMs: number } {
   let chars = 0;
   let fixedMs = 0;
   for (const item of s.queue) {
-    const ev = item.event;
-    const script = buildScript(ev);
-    if (script.kind === "text") {
-      chars += script.newText.length + script.oldText.length / 4;
-      fixedMs += 2 * BUSY_PAUSE_MS;
-    } else if (script.kind === "diff") {
-      fixedMs += BUSY_PAUSE_MS;
-    } else if (script.kind === "shell") {
-      chars += ev.kind === "shell" ? ev.command.length : 0;
-      if (ev.status !== "running") fixedMs += outputMs(ev);
-    }
+    chars += item.chars;
+    fixedMs += item.fixedMs;
   }
   const pb = s.current;
   if (pb) {
@@ -400,12 +428,41 @@ function currentPace(s: PlayerState): { cps: number; factor: number } {
   return { cps: BASE_CPS * s.speed * factor, factor };
 }
 
+function prepare(event: LiveEvent, enqueuedAt: number): Queued {
+  const script = buildScript(event);
+  let chars = 0;
+  let fixedMs = 0;
+  if (script.kind === "text") {
+    chars = script.newText.length + script.oldText.length / 4;
+    fixedMs = 2 * BUSY_PAUSE_MS;
+  } else if (script.kind === "diff") {
+    fixedMs = BUSY_PAUSE_MS;
+  } else if (script.kind === "shell" && event.kind === "shell") {
+    chars = event.command.length;
+    if (event.status !== "running") fixedMs = outputMs(event);
+  }
+  return { event, enqueuedAt, script, chars, fixedMs };
+}
+
+/** True when the editor, terminal, queue or controls would look different. */
+export function visibleChanged(a: PlayerState, b: PlayerState): boolean {
+  return (
+    a.editor !== b.editor ||
+    a.terminal !== b.terminal ||
+    a.touched !== b.touched ||
+    a.queue.length !== b.queue.length ||
+    a.current?.item.event.key !== b.current?.item.event.key ||
+    a.paused !== b.paused ||
+    a.speed !== b.speed
+  );
+}
+
 // ---------- public API ----------
 
 export function enqueue(s: PlayerState, event: LiveEvent): PlayerState {
   return {
     ...s,
-    queue: [...s.queue, { event, enqueuedAt: s.clock }],
+    queue: [...s.queue, prepare(event, s.clock)],
     touched: addTouched(s.touched, event),
   };
 }
@@ -416,7 +473,7 @@ export function seedHistory(s: PlayerState, events: LiveEvent[]): PlayerState {
     const entry = terminalEntryFor(ev, true);
     next = {
       ...next,
-      done: [...next.done, ev],
+      done: keepLast([...next.done, slim(ev)]),
       touched: addTouched(next.touched, ev),
       terminal: entry ? upsertEntry(next.terminal, entry) : next.terminal,
     };
@@ -425,8 +482,10 @@ export function seedHistory(s: PlayerState, events: LiveEvent[]): PlayerState {
 }
 
 export function applyUpdate(s: PlayerState, ev: LiveEvent): PlayerState {
-  const queue = s.queue.map((item) => (item.event.key === ev.key ? { ...item, event: merge(item.event, ev) } : item));
-  const done = s.done.map((d) => (d.key === ev.key ? merge(d, ev) : d));
+  const queue = s.queue.map((item) =>
+    item.event.key === ev.key ? prepare(merge(item.event, ev), item.enqueuedAt) : item,
+  );
+  const done = s.done.map((d) => (d.key === ev.key ? slim(merge(d, ev)) : d));
   let current = s.current;
   if (current && current.item.event.key === ev.key) {
     current = { ...current, item: { ...current.item, event: merge(current.item.event, ev) } };
