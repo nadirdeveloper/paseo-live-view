@@ -32,6 +32,7 @@
     "client/",
     "server/",
     "shared/",
+    "assets/",
     "LICENSE",
     "!**/*.test.ts",
     "!server/fixtures/**"

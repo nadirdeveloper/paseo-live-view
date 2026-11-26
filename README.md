@@ -2,7 +2,9 @@
 
 Watch your [Paseo](https://paseo.sh) agents work like a VS Code screen. Live View is a Paseo panel that replays what agents do — file edits with a moving pointer and typing cursor, every shell command and its output, pull-request reviews with findings pinned on the code, the agent's thinking — and gives each Claude Code subagent its own replay.
 
-<!-- Screenshots: add images under assets/screenshots/ and list them here and in paseo-plugin.json "media". -->
+| Edit replay | Review mode | Subagents |
+| --- | --- | --- |
+| ![The pointer clicks the line and the change is typed in, syntax-coloured](assets/screenshots/01-edit-replay.png) | ![Reviewing a PR: changed files with read bars, the diff with a reading highlight, and the verdict](assets/screenshots/02-review-mode.png) | ![Notices for working subagents with a Watch button, while Live View stays on the main agent](assets/screenshots/03-subagents.png) |
 
 ## Features
 
