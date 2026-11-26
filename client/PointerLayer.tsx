@@ -53,12 +53,17 @@ export function PointerLayer({ theme, target, rootRef, registry }: Props) {
 
   useEffect(() => {
     if (!target || !id) return;
-    const spot = registry.get(id);
-    const root = rootRef.current;
-    if (!spot || !root) return; // not on screen (scrolled away): stay put
     let cancelled = false;
-    // Wait a frame so the target has its final layout after this render.
-    const frame = setTimeout(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    // The target may mount a moment later (a folder opening, the tree scrolling to it): retry briefly.
+    const attempt = (triesLeft: number) => {
+      if (cancelled) return;
+      const spot = registry.get(id);
+      const root = rootRef.current;
+      if (!spot || !root) {
+        if (triesLeft > 0) timer = setTimeout(() => attempt(triesLeft - 1), 40);
+        return;
+      }
       root.measureInWindow((rootX, rootY, rootWidth, rootHeight) => {
         spot.view.measureInWindow((x, y, width, height) => {
           if (cancelled || (width === 0 && height === 0)) return;
@@ -66,9 +71,8 @@ export function PointerLayer({ theme, target, rootRef, registry }: Props) {
             target.kind === "editor" ? (spot.gutter ?? 40) + Math.min(column, 120) * CHAR_WIDTH + 2 : Math.min(48, width / 3);
           const toX = Math.max(0, Math.min(rootWidth - 16, x - rootX + offsetX));
           const toY = Math.max(0, Math.min(rootHeight - 16, y - rootY + height / 2));
-          const area = target.kind === "editor" ? `editor:${line}` : id;
-          const sameArea = lastArea.current?.split(":")[0] === area.split(":")[0] && target.kind === "editor";
-          lastArea.current = area;
+          const sameArea = lastArea.current === "editor" && target.kind === "editor";
+          lastArea.current = target.kind;
           Animated.parallel([
             Animated.timing(position, {
               toValue: { x: toX, y: toY },
@@ -80,10 +84,12 @@ export function PointerLayer({ theme, target, rootRef, registry }: Props) {
           ]).start();
         });
       });
-    }, 16);
+    };
+    // First try after the tree has had a moment to reveal and scroll to the row.
+    timer = setTimeout(() => attempt(8), 60);
     return () => {
       cancelled = true;
-      clearTimeout(frame);
+      if (timer) clearTimeout(timer);
     };
   }, [id, line, column, target?.kind]);
 

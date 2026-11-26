@@ -1,4 +1,4 @@
-import { memo, useContext, useEffect, useState } from "react";
+import { memo, useContext, useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { Icon } from "@getpaseo/plugin/client/ui";
 import type { TreeNode } from "./logic/fileTree";
@@ -25,12 +25,27 @@ function ancestors(path: string, root: string | null): string[] {
 export const FileTree = memo(function FileTree({ theme, tree, root, capped, touched, activePath, onSelect }: Props) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const registerSpot = useContext(PointerContext);
+  const scrollRef = useRef<ScrollView>(null);
+  const contentRef = useRef<View>(null);
+  const rowRefs = useRef(new Map<string, View>()).current;
 
   // Reveal the file the agent is working on.
   useEffect(() => {
     if (!activePath) return;
     const dirs = ancestors(activePath, root);
     setOpen((prev) => (dirs.every((d) => prev.has(d)) ? prev : new Set([...prev, ...dirs])));
+    // Then bring its row into view, so the pointer lands inside the tree.
+    const timer = setTimeout(() => {
+      const row = rowRefs.get(activePath);
+      const content = contentRef.current;
+      if (!row || !content) return;
+      row.measureLayout(
+        content,
+        (_x, y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 80), animated: false }),
+        () => {},
+      );
+    }, 30);
+    return () => clearTimeout(timer);
   }, [activePath, root]);
 
   const touchedSet = new Set(touched);
@@ -43,7 +58,16 @@ export const FileTree = memo(function FileTree({ theme, tree, root, capped, touc
     return (
       <View key={node.path}>
         <Pressable
-          ref={isDir ? undefined : (view) => registerSpot(`tree:${node.path}`, view as View | null)}
+          ref={
+            isDir
+              ? undefined
+              : (view) => {
+                  const v = view as View | null;
+                  if (v) rowRefs.set(node.path, v);
+                  else rowRefs.delete(node.path);
+                  registerSpot(`tree:${node.path}`, v);
+                }
+          }
           accessibilityRole="button"
           accessibilityLabel={isDir ? `Folder ${node.name}` : `Open ${node.name}`}
           onPress={() => {
@@ -109,7 +133,8 @@ export const FileTree = memo(function FileTree({ theme, tree, root, capped, touc
   );
 
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 12 }}>
+    <ScrollView ref={scrollRef} style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 12 }}>
+      <View ref={contentRef}>
       {heading(root ? baseName(root).toUpperCase() : "FILES")}
       {tree.length === 0 ? (
         <Text style={{ color: theme.colors.foregroundMuted, paddingHorizontal: 10, fontSize: 12 }}>Loading files…</Text>
@@ -127,6 +152,7 @@ export const FileTree = memo(function FileTree({ theme, tree, root, capped, touc
           {outside.map((path) => row({ name: path, path }, 0))}
         </>
       ) : null}
+      </View>
     </ScrollView>
   );
 });

@@ -52,6 +52,8 @@ export type PlayerState = {
   paused: boolean;
   speed: Speed;
   clock: number;
+  /** Catch-up factor used by the last tick (1 = normal speed). */
+  factor: number;
   editor: EditorFrame | null;
   terminal: TerminalEntry[];
   touched: string[];
@@ -65,6 +67,8 @@ const OUTPUT_LINES_PER_SEC = 100;
 const MAX_DELETE_SEC = 1;
 /** Finished events and terminal entries kept for the panel's lifetime. */
 export const MAX_DONE = 500;
+/** Share of the pre-edit pause spent gliding to the file before the pointer clicks it. */
+export const CLICK_AT = 2 / 3;
 
 export function createPlayer(): PlayerState {
   return {
@@ -74,6 +78,7 @@ export function createPlayer(): PlayerState {
     paused: false,
     speed: 1,
     clock: 0,
+    factor: 1,
     editor: null,
     terminal: [],
     touched: [],
@@ -284,7 +289,11 @@ function render(s: PlayerState, pb: Playback): PlayerState {
   const ev = pb.item.event;
   const { script, phase, progress } = pb;
   const withEditor = (frame: EditorFrame) => (sameFrame(s.editor, frame) ? s : { ...s, editor: frame });
-  if (script.kind === "text") return withEditor(textFrame(script, ev, phase, progress));
+  if (script.kind === "text") {
+    // A different file only opens once the pointer has clicked it in the tree.
+    if (phase === "dwell" && s.editor?.filePath !== script.filePath && dwellFraction(s, pb) < CLICK_AT) return s;
+    return withEditor(textFrame(script, ev, phase, progress));
+  }
   if (script.kind === "diff") {
     return withEditor({
       filePath: script.filePath,
@@ -308,6 +317,11 @@ function render(s: PlayerState, pb: Playback): PlayerState {
     return terminal === s.terminal ? s : { ...s, terminal };
   }
   return s;
+}
+
+function dwellFraction(s: PlayerState, pb: Playback): number {
+  const total = totalForPhase(pb, s.queue.length > 0, s.factor);
+  return total > 0 ? Math.min(1, pb.progress / total) : 1;
 }
 
 function startNext(s: PlayerState): PlayerState {
@@ -458,7 +472,7 @@ export type PhaseInfo = {
 export function currentPhase(s: PlayerState): PhaseInfo | null {
   const pb = s.current;
   if (!pb) return null;
-  const total = totalForPhase(pb, s.queue.length > 0);
+  const total = totalForPhase(pb, s.queue.length > 0, s.factor);
   const script = pb.script;
   return {
     key: pb.item.event.key,
@@ -471,7 +485,13 @@ export function currentPhase(s: PlayerState): PhaseInfo | null {
 
 /** True when the editor, terminal, queue or controls would look different. */
 export function visibleChanged(a: PlayerState, b: PlayerState): boolean {
+  const clicked = (s: PlayerState) => {
+    const pb = s.current;
+    return !!pb && pb.phase === "dwell" && dwellFraction(s, pb) >= CLICK_AT;
+  };
   return (
+    a.current?.phase !== b.current?.phase ||
+    clicked(a) !== clicked(b) ||
     a.editor !== b.editor ||
     a.terminal !== b.terminal ||
     a.touched !== b.touched ||
@@ -536,6 +556,7 @@ export function tick(s: PlayerState, dtMs: number): PlayerState {
   if (s.paused || (!s.current && s.queue.length === 0)) return s.paused ? s : { ...s, clock: s.clock + dtMs };
   let state: PlayerState = { ...s, clock: s.clock + dtMs };
   const { cps, factor } = currentPace(state);
+  state = state.factor === factor ? state : { ...state, factor };
   let left = dtMs;
   // Zero-length playbacks (instant ones) are consumed even when no time is left.
   for (let guard = 0; guard < 10000; guard++) {

@@ -133,7 +133,7 @@ describe("edit replay frames", () => {
 
   test("a write types the content into an empty editor", () => {
     let s = enqueue(createPlayer(), write("hello"));
-    s = tick(s, 400);
+    s = tick(s, 600);
     expect(s.editor?.text.length).toBeLessThan(5);
     s = run(s, 5000);
     expect(s.editor?.text).toBe("hello");
@@ -204,6 +204,30 @@ describe("efficiency", () => {
     const next = tick(s, 50);
     expect(visibleChanged(s, next)).toBe(false);
     expect(visibleChanged(next, run(next, 2000))).toBe(true);
+  });
+});
+
+describe("pointer beats", () => {
+  test("the editor keeps the previous file until the pointer clicks the new one", () => {
+    let s = run(enqueue(createPlayer(), edit("a\nNEW", "OLD", "NEW", "/w/first.js")), 5000);
+    s = enqueue(s, edit("b\nNEXT", "PREV", "NEXT", "/w/second.js"));
+    s = tick(s, 50);
+    expect(s.editor?.filePath).toBe("/w/first.js");
+    s = run(s, 500, 50);
+    expect(s.editor?.filePath).toBe("/w/second.js");
+  });
+
+  test("reaching the click point counts as a visible change", () => {
+    let s = run(enqueue(createPlayer(), edit("a\nNEW", "OLD", "NEW", "/w/first.js")), 5000);
+    s = enqueue(s, edit("a\nNEW2", "OLD", "NEW2", "/w/first.js"));
+    s = tick(s, 50);
+    let crossed = false;
+    for (let i = 0; i < 20; i++) {
+      const next = tick(s, 50);
+      if (s.current?.phase === "dwell" && next.current?.phase === "dwell" && visibleChanged(s, next)) crossed = true;
+      s = next;
+    }
+    expect(crossed).toBe(true);
   });
 });
 

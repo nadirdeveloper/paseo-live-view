@@ -101,16 +101,16 @@ function tokenizeJs(line: string, state: LexState): { tokens: Token[]; state: Le
     mode = "normal";
   }
   while (i < line.length) {
-    const rest = line.slice(i);
+    const rest = line.slice(i, i + 256); // bounded: patterns only look a short way ahead
     const ch = line[i];
     if (rest.startsWith("//")) {
-      out.push(rest, "comment");
+      out.push(line.slice(i), "comment");
       break;
     }
     if (rest.startsWith("/*")) {
       const end = line.indexOf("*/", i + 2);
       if (end === -1) {
-        out.push(rest, "comment");
+        out.push(line.slice(i), "comment");
         mode = "blockComment";
         break;
       }
@@ -128,7 +128,7 @@ function tokenizeJs(line: string, state: LexState): { tokens: Token[]; state: Le
     if (ch === "`") {
       const end = closeQuote(line, i + 1, "`");
       if (end === -1) {
-        out.push(rest, "string");
+        out.push(line.slice(i), "string");
         mode = "template";
         break;
       }
@@ -146,7 +146,7 @@ function tokenizeJs(line: string, state: LexState): { tokens: Token[]; state: Le
     const ident = IDENT.exec(rest);
     if (ident) {
       const word = ident[0];
-      const after = line.slice(i + word.length);
+      const after = line.slice(i + word.length, i + word.length + 64);
       let kind: TokenKind = "plain";
       if (JS_KEYWORDS.has(word)) kind = "keyword";
       else if (/^[A-Z]/.test(word)) kind = "type";
@@ -166,7 +166,7 @@ function tokenizeJson(line: string): Token[] {
   let i = 0;
   while (i < line.length) {
     const ch = line[i];
-    const rest = line.slice(i);
+    const rest = line.slice(i, i + 256); // bounded: patterns only look a short way ahead
     if (ch === '"') {
       const end = closeQuote(line, i + 1, '"');
       const stop = end === -1 ? line.length : end;
@@ -204,13 +204,15 @@ function tokenizeCss(line: string, state: LexState): { tokens: Token[]; state: L
     i = end + 2;
     mode = "normal";
   }
+  // True right after "{" or ";" (or at line start) until something other than whitespace.
+  let declarationStart = true;
   while (i < line.length) {
-    const rest = line.slice(i);
+    const rest = line.slice(i, i + 256);
     const ch = line[i];
-    if (rest.startsWith("/*")) {
+    if (ch === "/" && line[i + 1] === "*") {
       const end = line.indexOf("*/", i + 2);
       if (end === -1) {
-        out.push(rest, "comment");
+        out.push(line.slice(i), "comment");
         mode = "blockComment";
         break;
       }
@@ -223,8 +225,22 @@ function tokenizeCss(line: string, state: LexState): { tokens: Token[]; state: L
       const stop = end === -1 ? line.length : end;
       out.push(line.slice(i, stop), "string");
       i = stop;
+      declarationStart = false;
       continue;
     }
+    if (ch === "{" || ch === ";") {
+      out.push(ch, "punctuation");
+      i++;
+      declarationStart = true;
+      continue;
+    }
+    if (ch === " " || ch === "\t") {
+      out.push(ch, "plain");
+      i++;
+      continue;
+    }
+    const wasDeclarationStart = declarationStart;
+    declarationStart = false;
     const hex = /^#[0-9a-fA-F]{3,8}\b/.exec(rest);
     if (hex && /[\s:,(]/.test(i > 0 ? line[i - 1] : " ")) {
       out.push(hex[0], "number");
@@ -246,10 +262,9 @@ function tokenizeCss(line: string, state: LexState): { tokens: Token[]; state: L
     }
     const ident = /^-?[A-Za-z_][\w-]*/.exec(rest);
     if (ident) {
-      const after = line.slice(i + ident[0].length);
+      const after = line.slice(i + ident[0].length, i + ident[0].length + 8);
       // "name:" at the start of a declaration (or "name: value") is a property; "a:hover" is not.
-      const atDeclarationStart = /(^|[{;])\s*$/.test(line.slice(0, i));
-      const kind: TokenKind = (atDeclarationStart && /^\s*:(?!:)/.test(after)) || /^\s*:\s/.test(after)
+      const kind: TokenKind = (wasDeclarationStart && /^\s*:(?!:)/.test(after)) || /^\s*:\s/.test(after)
         ? "property"
         : prev === "." || prev === "#"
           ? "type"
@@ -279,12 +294,12 @@ function tokenizeHtml(line: string, state: LexState): { tokens: Token[]; state: 
   }
   let inTag = false;
   while (i < line.length) {
-    const rest = line.slice(i);
+    const rest = line.slice(i, i + 256); // bounded: patterns only look a short way ahead
     const ch = line[i];
     if (!inTag && rest.startsWith("<!--")) {
       const end = line.indexOf("-->", i + 4);
       if (end === -1) {
-        out.push(rest, "comment");
+        out.push(line.slice(i), "comment");
         mode = "htmlComment";
         break;
       }
@@ -345,7 +360,7 @@ function tokenizeMarkdown(line: string): Token[] {
     i = list[0].length;
   }
   while (i < line.length) {
-    const rest = line.slice(i);
+    const rest = line.slice(i, i + 256); // bounded: patterns only look a short way ahead
     const code = /^`[^`]*`/.exec(rest);
     if (code) {
       out.push(code[0], "string");
@@ -376,11 +391,11 @@ function tokenizeShell(line: string): Token[] {
   let i = 0;
   let commandNext = true;
   while (i < line.length) {
-    const rest = line.slice(i);
+    const rest = line.slice(i, i + 256); // bounded: patterns only look a short way ahead
     const ch = line[i];
     const prev = i > 0 ? line[i - 1] : " ";
     if (ch === "#" && /\s/.test(prev)) {
-      out.push(rest, "comment");
+      out.push(line.slice(i), "comment");
       break;
     }
     if (ch === '"' || ch === "'") {
@@ -491,6 +506,12 @@ function scanMode(line: string, lang: Lang, mode: LexState["mode"]): LexState["m
     }
   }
   return mode;
+}
+
+/** The state entering the line after `line`, found with the fast scan (no tokens built). */
+export function stateAfterLine(line: string, lang: Lang, state: LexState): LexState {
+  const mode = scanMode(line, lang, state.mode);
+  return mode === "normal" ? START : { mode };
 }
 
 /** The lexer state entering `lines[lineIndex]`. */

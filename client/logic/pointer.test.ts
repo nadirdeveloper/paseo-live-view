@@ -38,6 +38,15 @@ describe("pointerTarget", () => {
     expect(pointerTarget(s)).toEqual({ kind: "editor", path: "/w/f.js", line: 2, column: 1 });
   });
 
+  test("a diff-only edit points at the first highlighted line", () => {
+    const ev: EditEvent = {
+      ...base(), kind: "edit", filePath: "/w/f.js", inWorkspace: true,
+      unifiedDiff: "@@ -1,2 +1,3 @@\n one\n+two\n three", afterText: "one\ntwo\nthree",
+    };
+    const s = tick(enqueue(createPlayer(), ev), 10);
+    expect(pointerTarget(s)).toEqual({ kind: "editor", path: "/w/f.js", line: 2, column: 0 });
+  });
+
   test("while a command types it points at that command in the terminal", () => {
     const ev = shell("node --test");
     const s = tick(enqueue(createPlayer(), ev), 10);

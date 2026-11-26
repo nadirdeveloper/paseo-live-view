@@ -78,7 +78,7 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
       onSelect={openFile}
     />
   );
-  const editor = <EditorView theme={theme} compact={compact} frame={player.editor} manual={follow ? null : manual} />;
+  const editor = <EditorView theme={theme} compact={compact} frame={follow ? player.editor : null} manual={follow ? null : manual} />;
   const terminal = <TerminalView theme={theme} entries={player.terminal} />;
   const controls = (
     <Controls

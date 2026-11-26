@@ -1,12 +1,10 @@
-import { currentPhase, type PlayerState } from "./player";
+import { CLICK_AT, currentPhase, type PlayerState } from "./player";
 
 export type PointerTarget =
   | { kind: "tree"; path: string; click: boolean }
   | { kind: "editor"; path: string; line: number; column: number }
   | { kind: "terminal"; key: string };
 
-/** Share of the pre-edit pause spent gliding to the file before the click. */
-const CLICK_AT = 2 / 3;
 
 function cursorPosition(text: string, cursor: number): { line: number; column: number } {
   let line = 1;

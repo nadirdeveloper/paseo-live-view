@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { START, languageFor, stateAt, tokenizeLine, type Token, type TokenKind } from "./highlight";
+import { START, languageFor, stateAfterLine, stateAt, tokenizeLine, type Token, type TokenKind } from "./highlight";
 
 function kindsOf(tokens: Token[]): [string, TokenKind][] {
   return tokens.filter((t) => t.kind !== "plain" && t.text.trim() !== "").map((t) => [t.text, t.kind]);
@@ -93,6 +93,23 @@ describe("other languages", () => {
   test("shell comments, strings and variables", () => {
     const { tokens } = tokenizeLine('echo "$HOME" # done', "shell", START);
     expect(kindsOf(tokens)).toEqual(expect.arrayContaining([["echo", "function"], ['"$HOME"', "string"], ["# done", "comment"]]));
+  });
+});
+
+describe("long lines", () => {
+  test("a 130 KB line of minified CSS tokenizes quickly", () => {
+    const css = ".a{color:red;margin:0 auto}".repeat(5000);
+    const start = performance.now();
+    const { tokens } = tokenizeLine(css, "css", START);
+    expect(performance.now() - start).toBeLessThan(100);
+    expect(tokens.map((t) => t.text).join("")).toBe(css);
+    expect(tokens).toContainEqual({ text: "color", kind: "property" });
+  });
+
+  test("stateAfterLine gives the next line's state without building tokens", () => {
+    expect(stateAfterLine("a /* open", "js", START).mode).toBe("blockComment");
+    expect(stateAfterLine("x */ y", "js", { mode: "blockComment" }).mode).toBe("normal");
+    expect(stateAfterLine("{}", "json", START)).toEqual(START);
   });
 });
 

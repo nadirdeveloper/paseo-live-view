@@ -1,7 +1,7 @@
-import { useContext, useEffect, useRef, useState } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { PointerContext } from "./PointerLayer";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { START, languageFor, stateAt, tokenizeLine, type LexState, type Token, type TokenKind } from "./logic/highlight";
+import { START, languageFor, stateAfterLine, stateAt, tokenizeLine, type Lang, type LexState, type Token, type TokenKind } from "./logic/highlight";
 import type { EditorFrame } from "./logic/player";
 import { clipLine, visibleWindow } from "./logic/view";
 import { Icon } from "@getpaseo/plugin/client/ui";
@@ -37,18 +37,45 @@ function tokenColor(kind: TokenKind, theme: Theme): string {
   }
 }
 
+const TOKEN_KINDS: TokenKind[] = [
+  "plain", "keyword", "string", "number", "comment", "function", "type", "tag", "attr", "property", "punctuation",
+];
+
+type LineStyles = {
+  tokens: Record<TokenKind, { color: string; fontStyle: "italic" | "normal" }>;
+  caret: { color: string };
+  gutter: object;
+  gutterStrong: object;
+  code: object;
+  lit: object;
+};
+
+/** One set of style objects per theme, shared by every line. */
+function makeStyles(theme: Theme): LineStyles {
+  const tokens = {} as LineStyles["tokens"];
+  for (const kind of TOKEN_KINDS) {
+    tokens[kind] = { color: tokenColor(kind, theme), fontStyle: kind === "comment" ? "italic" : "normal" };
+  }
+  const gutter = { paddingRight: 10, textAlign: "right" as const, fontFamily: MONO, fontSize: 12, lineHeight: LINE_HEIGHT };
+  return {
+    tokens,
+    caret: { color: theme.colors.accent },
+    gutter: { ...gutter, color: theme.colors.foregroundMuted },
+    gutterStrong: { ...gutter, color: theme.colors.foreground },
+    code: { flex: 1, color: theme.colors.foreground, fontFamily: MONO, fontSize: 12, lineHeight: LINE_HEIGHT },
+    lit: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: theme.colors.accent, opacity: 0.16 },
+  };
+}
+
 /** Coloured spans for one line, with the text cursor glyph inserted at `cursorColumn`. */
-function renderTokens(tokens: Token[], cursorColumn: number | null, theme: Theme) {
+function renderTokens(tokens: Token[], cursorColumn: number | null, styles: LineStyles) {
   const spans = [];
   let at = 0;
   let key = 0;
-  const caret = <Text key="caret" style={{ color: theme.colors.accent }}>▍</Text>;
+  const caret = <Text key="caret" style={styles.caret}>▍</Text>;
   let caretPlaced = cursorColumn === null;
   for (const token of tokens) {
-    const style = {
-      color: tokenColor(token.kind, theme),
-      fontStyle: token.kind === "comment" ? ("italic" as const) : ("normal" as const),
-    };
+    const style = styles.tokens[token.kind];
     const end = at + token.text.length;
     if (!caretPlaced && cursorColumn !== null && cursorColumn >= at && cursorColumn < end) {
       const split = cursorColumn - at;
@@ -65,15 +92,61 @@ function renderTokens(tokens: Token[], cursorColumn: number | null, theme: Theme
   return spans;
 }
 
+type LineProps = {
+  n: number;
+  content: string;
+  lang: Lang | null;
+  /** Lexer mode entering this line (a string so memo compares it cheaply). */
+  carry: LexState["mode"];
+  caret: number | null;
+  lit: boolean;
+  gutterWidth: number;
+  pointerLine: boolean;
+  styles: LineStyles;
+};
+
+/** One editor line; memoised so a typing frame only re-renders the line being typed. */
+const Line = memo(function Line({ n, content, lang, carry, caret, lit, gutterWidth, pointerLine, styles }: LineProps) {
+  const registerSpot = useContext(PointerContext);
+  const tokens = lang ? tokenizeLine(content, lang, carry === "normal" ? START : { mode: carry }).tokens : null;
+  return (
+    <View
+      ref={pointerLine ? (view) => registerSpot("editor:line", view, gutterWidth) : undefined}
+      style={{ flexDirection: "row", minHeight: LINE_HEIGHT }}
+    >
+      {lit ? <View pointerEvents="none" style={styles.lit} /> : null}
+      <Text style={[caret !== null || lit ? styles.gutterStrong : styles.gutter, { width: gutterWidth }]}>{n}</Text>
+      <Text style={styles.code}>
+        {tokens
+          ? content
+            ? renderTokens(tokens, caret, styles)
+            : caret !== null
+              ? renderTokens([], 0, styles)
+              : " "
+          : caret !== null ? (
+            <>
+              {content.slice(0, caret)}
+              <Text style={styles.caret}>▍</Text>
+              {content.slice(caret)}
+            </>
+          ) : (
+            content || " "
+          )}
+      </Text>
+    </View>
+  );
+});
+
 function lineOf(text: string, offset: number): number {
   let line = 1;
   for (let i = 0; i < offset && i < text.length; i++) if (text.charCodeAt(i) === 10) line++;
   return line;
 }
 
-export function EditorView({ theme, compact, frame, manual }: Props) {
+/** Memoised: while you browse a file yourself, agent ticks don't re-render it. */
+export const EditorView = memo(function EditorView({ theme, compact, frame, manual }: Props) {
   const scrollRef = useRef<ScrollView>(null);
-  const registerSpot = useContext(PointerContext);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const path = manual?.path ?? frame?.filePath ?? null;
   const text = manual ? manual.text ?? "" : frame?.text ?? "";
   const cursor = manual ? null : frame?.cursor ?? null;
@@ -125,64 +198,25 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
   const rows = [];
   let lexState = carryIn;
   for (let n = first; n <= last; n++) {
-    const lit = highlight !== null && n >= highlight.startLine && n <= highlight.endLine;
+    const full = lines[n - 1] ?? "";
     const hasCursor = cursorLine === n;
     // Minified files can be one enormous line; draw only part of it.
-    const clipped = clipLine(lines[n - 1] ?? "", hasCursor ? cursorColumn : null);
-    const content = clipped.text;
-    const column = clipped.cursorColumn ?? 0;
-    let tokens: Token[] | null = null;
-    if (lang) {
-      const full = lines[n - 1] ?? "";
-      const lexed = tokenizeLine(content, lang, lexState);
-      tokens = lexed.tokens;
-      lexState = content === full ? lexed.state : tokenizeLine(full, lang, lexState).state;
-    }
-    const isPointerLine = n === (cursorLine ?? highlight?.startLine ?? -1);
+    const clipped = clipLine(full, hasCursor ? cursorColumn : null);
     rows.push(
-      <View
+      <Line
         key={n}
-        ref={isPointerLine ? (view) => registerSpot("editor:line", view, gutterWidth) : undefined}
-        style={{ flexDirection: "row", minHeight: LINE_HEIGHT }}
-      >
-        {lit ? (
-          <View
-            pointerEvents="none"
-            style={{ position: "absolute", left: 0, right: 0, top: 0, bottom: 0, backgroundColor: theme.colors.accent, opacity: 0.16 }}
-          />
-        ) : null}
-        <Text
-          style={{
-            width: gutterWidth,
-            paddingRight: 10,
-            textAlign: "right",
-            color: hasCursor || lit ? theme.colors.foreground : theme.colors.foregroundMuted,
-            fontFamily: MONO,
-            fontSize: 12,
-            lineHeight: LINE_HEIGHT,
-          }}
-        >
-          {n}
-        </Text>
-        <Text style={{ flex: 1, color: theme.colors.foreground, fontFamily: MONO, fontSize: 12, lineHeight: LINE_HEIGHT }}>
-          {tokens
-            ? content
-              ? renderTokens(tokens, hasCursor ? column : null, theme)
-              : hasCursor
-                ? renderTokens([], 0, theme)
-                : " "
-            : hasCursor ? (
-              <>
-                {content.slice(0, column)}
-                <Text style={{ color: theme.colors.accent }}>▍</Text>
-                {content.slice(column)}
-              </>
-            ) : (
-              content || " "
-            )}
-        </Text>
-      </View>,
+        n={n}
+        content={clipped.text}
+        lang={lang}
+        carry={lexState.mode}
+        caret={hasCursor ? clipped.cursorColumn ?? 0 : null}
+        lit={highlight !== null && n >= highlight.startLine && n <= highlight.endLine}
+        gutterWidth={gutterWidth}
+        pointerLine={n === (cursorLine ?? highlight?.startLine ?? -1)}
+        styles={styles}
+      />,
     );
+    if (lang) lexState = stateAfterLine(full, lang, lexState);
   }
 
   return (
@@ -244,4 +278,4 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
       </ScrollView>
     </View>
   );
-}
+});
