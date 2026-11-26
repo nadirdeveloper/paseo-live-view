@@ -57,7 +57,8 @@ export type PlayerState = {
   touched: string[];
 };
 
-const DWELL_MS = 300;
+/** Calm pause before an edit: long enough for the pointer to glide to the file and click it. */
+const DWELL_MS = 700;
 const HOLD_MS = 500;
 const BUSY_PAUSE_MS = 100;
 const OUTPUT_LINES_PER_SEC = 100;
@@ -442,6 +443,30 @@ function prepare(event: LiveEvent, enqueuedAt: number): Queued {
     if (event.status !== "running") fixedMs = outputMs(event);
   }
   return { event, enqueuedAt, script, chars, fixedMs };
+}
+
+export type PhaseInfo = {
+  key: string;
+  kind: "text" | "diff" | "shell" | "instant";
+  filePath: string | null;
+  phase: Phase;
+  /** 0..1 through the current phase. */
+  fraction: number;
+};
+
+/** What the current playback is doing, for the pointer overlay. Null when idle. */
+export function currentPhase(s: PlayerState): PhaseInfo | null {
+  const pb = s.current;
+  if (!pb) return null;
+  const total = totalForPhase(pb, s.queue.length > 0);
+  const script = pb.script;
+  return {
+    key: pb.item.event.key,
+    kind: script.kind,
+    filePath: script.kind === "text" || script.kind === "diff" ? script.filePath : null,
+    phase: pb.phase,
+    fraction: total > 0 ? Math.min(1, pb.progress / total) : 1,
+  };
 }
 
 /** True when the editor, terminal, queue or controls would look different. */

@@ -1,9 +1,11 @@
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Controls } from "./Controls";
 import { EditorView, type ManualView } from "./EditorView";
 import { FileTree } from "./FileTree";
+import { pointerTarget } from "./logic/pointer";
+import { PointerContext, PointerLayer, createRegister, type PointerRegistry } from "./PointerLayer";
 import { TerminalView } from "./TerminalView";
 import { AgentFollowers, useLiveFeed } from "./useLiveFeed";
 
@@ -23,6 +25,10 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   const [follow, setFollow] = useState(true);
   const [manual, setManual] = useState<ManualView | null>(null);
   const [pane, setPane] = useState<Pane>("editor");
+  const rootRef = useRef<View>(null);
+  const registry = useRef<PointerRegistry>(new Map()).current;
+  const register = useMemo(() => createRegister(registry), [registry]);
+  const target = useMemo(() => (follow ? pointerTarget(player) : null), [player, follow]);
 
   // Read the latest values through refs so openFile keeps one identity and FileTree can skip renders.
   const doneRef = useRef(player.done);
@@ -123,7 +129,8 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: theme.colors.surface0 }}>
+    <PointerContext.Provider value={register}>
+    <View ref={rootRef} style={{ flex: 1, backgroundColor: theme.colors.surface0 }}>
       <AgentFollowers feed={feed} />
       <View style={{ flex: 65, flexDirection: "row" }}>
         <View style={{ width: 220, borderRightWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface1 }}>
@@ -133,6 +140,8 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
       </View>
       {controls}
       <View style={{ flex: 35 }}>{terminal}</View>
+      <PointerLayer theme={theme} target={target} rootRef={rootRef} registry={registry} />
     </View>
+    </PointerContext.Provider>
   );
 }

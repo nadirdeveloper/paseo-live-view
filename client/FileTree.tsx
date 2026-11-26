@@ -1,8 +1,9 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useContext, useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { Icon } from "@getpaseo/plugin/client/ui";
 import type { TreeNode } from "./logic/fileTree";
 import { fileIcon, folderIcon } from "./logic/icons";
+import { PointerContext } from "./PointerLayer";
 import { baseName, toneColor, type Theme } from "./style";
 
 type Props = {
@@ -23,6 +24,7 @@ function ancestors(path: string, root: string | null): string[] {
 
 export const FileTree = memo(function FileTree({ theme, tree, root, capped, touched, activePath, onSelect }: Props) {
   const [open, setOpen] = useState<Set<string>>(new Set());
+  const registerSpot = useContext(PointerContext);
 
   // Reveal the file the agent is working on.
   useEffect(() => {
@@ -41,6 +43,7 @@ export const FileTree = memo(function FileTree({ theme, tree, root, capped, touc
     return (
       <View key={node.path}>
         <Pressable
+          ref={isDir ? undefined : (view) => registerSpot(`tree:${node.path}`, view as View | null)}
           accessibilityRole="button"
           accessibilityLabel={isDir ? `Folder ${node.name}` : `Open ${node.name}`}
           onPress={() => {

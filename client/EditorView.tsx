@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
+import { PointerContext } from "./PointerLayer";
 import { Pressable, ScrollView, Text, View } from "react-native";
 import { START, languageFor, stateAt, tokenizeLine, type LexState, type Token, type TokenKind } from "./logic/highlight";
 import type { EditorFrame } from "./logic/player";
@@ -72,6 +73,7 @@ function lineOf(text: string, offset: number): number {
 
 export function EditorView({ theme, compact, frame, manual }: Props) {
   const scrollRef = useRef<ScrollView>(null);
+  const registerSpot = useContext(PointerContext);
   const path = manual?.path ?? frame?.filePath ?? null;
   const text = manual ? manual.text ?? "" : frame?.text ?? "";
   const cursor = manual ? null : frame?.cursor ?? null;
@@ -136,8 +138,13 @@ export function EditorView({ theme, compact, frame, manual }: Props) {
       tokens = lexed.tokens;
       lexState = content === full ? lexed.state : tokenizeLine(full, lang, lexState).state;
     }
+    const isPointerLine = n === (cursorLine ?? highlight?.startLine ?? -1);
     rows.push(
-      <View key={n} style={{ flexDirection: "row", minHeight: LINE_HEIGHT }}>
+      <View
+        key={n}
+        ref={isPointerLine ? (view) => registerSpot("editor:line", view, gutterWidth) : undefined}
+        style={{ flexDirection: "row", minHeight: LINE_HEIGHT }}
+      >
         {lit ? (
           <View
             pointerEvents="none"

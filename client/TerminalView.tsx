@@ -1,5 +1,6 @@
 import { Icon } from "@getpaseo/plugin/client/ui";
-import { memo, useRef } from "react";
+import { memo, useContext, useRef } from "react";
+import { PointerContext } from "./PointerLayer";
 import { ScrollView, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import type { TerminalEntry } from "./logic/player";
 import { MONO, baseName, type Theme } from "./style";
@@ -12,6 +13,7 @@ const mono = { fontFamily: MONO, fontSize: 12, lineHeight: 17 };
 
 /** One command; memoised so unchanged rows skip re-rendering while another row animates. */
 const TerminalRow = memo(function TerminalRow({ theme, entry }: { theme: Theme; entry: TerminalEntry }) {
+  const registerSpot = useContext(PointerContext);
         const typing = entry.kind === "shell" && entry.typedCommand.length < entry.command.length;
         const status =
           entry.kind === "failed-edit"
@@ -35,7 +37,7 @@ const TerminalRow = memo(function TerminalRow({ theme, entry }: { theme: Theme; 
               : { name: "SquareTerminal", color: theme.colors.statusSuccess };
         const shown = entry.output.split("\n").slice(0, entry.shownOutputLines).join("\n");
         return (
-          <View style={{ gap: 2 }}>
+          <View ref={(view) => registerSpot(`terminal:${entry.key}`, view)} style={{ gap: 2 }}>
             <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
               <View style={{ paddingTop: 1 }}>
                 <Icon name={icon.name} size={14} color={icon.color} />
