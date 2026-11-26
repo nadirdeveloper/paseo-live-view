@@ -16,12 +16,17 @@ export function LaneNotices({ theme, lanes, watchingId, onWatch }: { theme: Them
   const [notices, setNotices] = useState<Shown[]>([]);
 
   useEffect(() => {
-    const found = laneNotices(previous.current, lanes, watchingId, openedAt);
+    const { add, clear } = laneNotices(previous.current, lanes, watchingId, openedAt);
     previous.current = lanes;
-    if (found.length === 0) return;
-    const fresh = found.map((n) => ({ ...n, id: `${n.laneId}:${n.kind}` }));
+    // A finished subagent's notice goes away.
+    if (clear.length > 0) setNotices((list) => list.filter((n) => !clear.includes(n.laneId)));
+    if (add.length === 0) return;
+    const fresh = add.map((n) => ({ ...n, id: `${n.laneId}:${n.kind}` }));
     setNotices((list) => [...list.filter((n) => !fresh.some((f) => f.laneId === n.laneId)), ...fresh].slice(-MAX_SHOWN));
-    const timer = setTimeout(() => setNotices((list) => list.filter((n) => !fresh.some((f) => f.id === n.id))), SHOW_MS);
+    // "Working" notices stay until the subagent finishes; failure notices hide after a while.
+    const failures = fresh.filter((f) => f.kind === "failed");
+    if (failures.length === 0) return;
+    const timer = setTimeout(() => setNotices((list) => list.filter((n) => !failures.some((f) => f.id === n.id))), SHOW_MS);
     return () => clearTimeout(timer);
   }, [lanes]);
 
@@ -34,8 +39,8 @@ export function LaneNotices({ theme, lanes, watchingId, onWatch }: { theme: Them
   return (
     <View style={{ gap: 4, paddingHorizontal: 8, paddingVertical: 4, borderBottomWidth: 1, borderColor: theme.colors.border, backgroundColor: theme.colors.surface1 }}>
       {notices.map((n) => {
-        const color = n.kind === "failed" ? theme.colors.statusDanger : n.kind === "finished" ? theme.colors.statusSuccess : theme.colors.accent;
-        const verb = n.kind === "started" ? "started" : n.kind === "finished" ? "finished" : "failed";
+        const color = n.kind === "failed" ? theme.colors.statusDanger : theme.colors.accent;
+        const verb = n.kind === "started" ? "is working" : "failed";
         return (
           <View
             key={n.id}

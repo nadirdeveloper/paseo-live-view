@@ -23,22 +23,26 @@ describe("laneNotices", () => {
 
   test("a subagent that appears after the panel opened is announced", () => {
     const sub = lane("a:s", { parentId: "a", kind: "subagent", label: "Explore #1", task: "find env", createdAt: 150 });
-    expect(laneNotices([main], [main, sub], "a", openedAt)).toEqual([{ laneId: "a:s", kind: "started", label: "Explore #1", task: "find env" }]);
+    expect(laneNotices([main], [main, sub], "a", openedAt)).toEqual({ add: [{ laneId: "a:s", kind: "started", label: "Explore #1", task: "find env" }], clear: [] });
   });
 
   test("subagents loaded from history are not announced", () => {
     const sub = lane("a:s", { parentId: "a", kind: "subagent", createdAt: 50 });
-    expect(laneNotices([main], [main, sub], "a", openedAt)).toEqual([]);
+    expect(laneNotices([main], [main, sub], "a", openedAt)).toEqual({ add: [], clear: [] });
   });
 
-  test("a subagent finishing or failing is announced", () => {
+  test("a subagent that finishes has its notice removed, with nothing new added", () => {
     const running = lane("a:s", { parentId: "a", kind: "subagent", label: "X", createdAt: 150 });
-    expect(laneNotices([main, running], [main, { ...running, status: "done" }], "a", openedAt)).toMatchObject([{ kind: "finished" }]);
-    expect(laneNotices([main, running], [main, { ...running, status: "failed" }], "a", openedAt)).toMatchObject([{ kind: "failed" }]);
+    expect(laneNotices([main, running], [main, { ...running, status: "done" }], "a", openedAt)).toEqual({ add: [], clear: ["a:s"] });
+  });
+
+  test("a subagent that fails is announced so it isn't missed", () => {
+    const running = lane("a:s", { parentId: "a", kind: "subagent", label: "X", createdAt: 150 });
+    expect(laneNotices([main, running], [main, { ...running, status: "failed" }], "a", openedAt).add).toMatchObject([{ kind: "failed" }]);
   });
 
   test("nothing is announced about the lane you're already watching", () => {
-    const running = lane("a:s", { parentId: "a", kind: "subagent", createdAt: 150 });
-    expect(laneNotices([main, running], [main, { ...running, status: "done" }], "a:s", openedAt)).toEqual([]);
+    const sub = lane("a:s", { parentId: "a", kind: "subagent", createdAt: 150 });
+    expect(laneNotices([main], [main, sub], "a:s", openedAt).add).toEqual([]);
   });
 });

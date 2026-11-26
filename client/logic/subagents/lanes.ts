@@ -93,26 +93,33 @@ export function laneRole(lanes: LaneInfo[], id: string): { role: "Main agent" | 
   return { role: "Sub-subagent", startedBy: parent.label };
 }
 
-export type LaneNotice = { laneId: string; kind: "started" | "finished" | "failed"; label: string; task: string | null };
+export type LaneNotice = { laneId: string; kind: "started" | "failed"; label: string; task: string | null };
 
 /**
  * What to tell the user about other agents without switching to them: subagents that started after
- * the panel opened, and subagents that finished or failed. Never about the lane being watched.
+ * the panel opened (add) and failures (add); a subagent that finishes just has its notice removed
+ * (clear). Never announces the lane being watched.
  */
-export function laneNotices(prev: LaneInfo[], next: LaneInfo[], watchingId: string | null, openedAt: number): LaneNotice[] {
+export function laneNotices(
+  prev: LaneInfo[],
+  next: LaneInfo[],
+  watchingId: string | null,
+  openedAt: number,
+): { add: LaneNotice[]; clear: string[] } {
   const before = new Map(prev.map((l) => [l.id, l]));
-  const out: LaneNotice[] = [];
+  const add: LaneNotice[] = [];
+  const clear: string[] = [];
   for (const lane of next) {
-    if (lane.kind !== "subagent" || lane.id === watchingId) continue;
+    if (lane.kind !== "subagent") continue;
     const was = before.get(lane.id);
     const notice = { laneId: lane.id, label: lane.label, task: lane.task };
     if (!was) {
-      if (lane.createdAt > openedAt) out.push({ ...notice, kind: "started" });
+      if (lane.createdAt > openedAt && lane.id !== watchingId) add.push({ ...notice, kind: "started" });
       continue;
     }
-    if (was.status !== lane.status && (lane.status === "done" || lane.status === "failed")) {
-      out.push({ ...notice, kind: lane.status === "done" ? "finished" : "failed" });
-    }
+    if (was.status === lane.status) continue;
+    if (lane.status === "done") clear.push(lane.id);
+    else if (lane.status === "failed" && lane.id !== watchingId) add.push({ ...notice, kind: "failed" });
   }
-  return out;
+  return { add, clear };
 }
