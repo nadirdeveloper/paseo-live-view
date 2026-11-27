@@ -1,9 +1,10 @@
 import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
 import { homedir } from "node:os";
-import { listFiles, readText } from "./server/files";
+import { listFiles, readText, resolveInside } from "./server/files";
+import { createSnapshots } from "./server/snapshot";
 import { isAllowedPath, locate, tail } from "./server/subagents";
 import { subagentsLocateRpc, subagentsTailSubscription } from "./shared/subagents";
-import { filesListRpc, filesReadRpc } from "./shared/files";
+import { filesChangesRpc, filesListRpc, filesReadRpc } from "./shared/files";
 
 async function workspaceDir(paseo: PluginHandlerContext["paseo"], workspaceId: string): Promise<string> {
   const workspace = paseo.workspaces.ref(workspaceId);
@@ -13,13 +14,27 @@ async function workspaceDir(paseo: PluginHandlerContext["paseo"], workspaceId: s
 }
 
 export default function contribute(server: PluginServerContext) {
+  // Copies of workspace text files, so edits made by shell commands can be replayed (memory only).
+  const snapshots = createSnapshots();
   server.handle(filesListRpc, async ({ workspaceId }, { paseo }) => {
     const root = await workspaceDir(paseo, workspaceId);
-    return { root, ...(await listFiles(root)) };
+    const listed = await listFiles(root);
+    snapshots.prime(root).catch((error) => console.error("[live-view] snapshot failed", error));
+    return { root, ...listed };
   });
   server.handle(filesReadRpc, async ({ workspaceId, path }, { paseo }) => {
     const root = await workspaceDir(paseo, workspaceId);
-    return readText(root, path);
+    const result = await readText(root, path);
+    if (result.status === "ok") {
+      // The panel shows this text now, so a later check shouldn't report it again as a change.
+      const target = await resolveInside(root, path);
+      if (target) snapshots.remember(root, target, result.text);
+    }
+    return result;
+  });
+  server.handle(filesChangesRpc, async ({ workspaceId }, { paseo }) => {
+    const root = await workspaceDir(paseo, workspaceId);
+    return { changes: await snapshots.changes(root) };
   });
   server.handle(subagentsLocateRpc, async ({ toolUseId, cwd }) => {
     const found = await locate(homedir(), toolUseId, cwd);
