@@ -44,7 +44,11 @@ type TextScript = {
 type DiffScript = { kind: "diff"; filePath: string; after: string; highlight: EditorFrame["highlight"] };
 export type ReadPlan = { steps: { path: string; from: number; to: number }[] };
 type ReadScript = { kind: "read"; reviewId: string; mode: "diff" | "file"; steps: ReadPlan["steps"] };
-type Script = TextScript | DiffScript | ReadScript | { kind: "shell" } | { kind: "instant" };
+/** A file the agent read, shown in the code editor: click the file, then each range's first line, then read it. */
+type ViewScript = { kind: "view"; filePath: string; text: string; ranges: { from: number; to: number }[] };
+/** Files a search listed, pulsed in the tree for a moment. */
+type GlanceScript = { kind: "glance"; paths: string[] };
+type Script = TextScript | DiffScript | ReadScript | ViewScript | GlanceScript | { kind: "shell" } | { kind: "instant" };
 
 /** dwell: go to the file and click it · aim: go to the line and click it · then delete/type/hold. */
 type Phase = "dwell" | "aim" | "delete" | "type" | "hold" | "output" | "read" | "done";
@@ -69,6 +73,8 @@ export type PlayerState = {
   reader: ReaderFrame | null;
   terminal: TerminalEntry[];
   touched: string[];
+  /** Tree rows a search is pointing out right now. */
+  glance: string[] | null;
 };
 
 /** Calm pause before an edit: long enough for the pointer to glide to the file and click it. */
@@ -114,6 +120,7 @@ export function createPlayer(): PlayerState {
     reader: null,
     terminal: [],
     touched: [],
+    glance: null,
   };
 }
 
@@ -176,6 +183,10 @@ function merge(previous: LiveEvent, next: LiveEvent): LiveEvent {
 
 function buildScript(ev: LiveEvent): Script {
   if (ev.kind === "shell") return { kind: "shell" };
+  if (ev.kind === "view") {
+    return ev.ranges.length > 0 ? { kind: "view", filePath: ev.filePath, text: ev.text, ranges: ev.ranges } : { kind: "instant" };
+  }
+  if (ev.kind === "glance") return ev.paths.length > 0 ? { kind: "glance", paths: ev.paths } : { kind: "instant" };
   // Reads and thoughts never play in the editor/terminal; they're handled by review mode and the strip.
   if (ev.kind !== "edit" && ev.kind !== "write") return { kind: "instant" };
   if (isFailure(ev)) return { kind: "instant" };
@@ -233,9 +244,11 @@ function buildScript(ev: LiveEvent): Script {
 function firstPhase(script: Script): Phase {
   switch (script.kind) {
     case "read":
-      return "dwell";
     case "text":
+    case "view":
       return "dwell";
+    case "glance":
+      return "hold";
     case "diff":
       return "hold";
     case "shell":
@@ -316,7 +329,8 @@ function textFrame(script: TextScript, ev: LiveEvent, phase: Phase, progress: nu
     const typed = script.newText.slice(0, Math.floor(progress));
     return { ...frame, text: prefix + typed + rest, cursor: script.offset + typed.length, highlight: null };
   }
-  const lines = lineCount(script.newText);
+  // A trailing line break ends the last line; it doesn't start another one.
+  const lines = lineCount(script.newText.endsWith("\n") ? script.newText.slice(0, -1) : script.newText) || (script.newText ? 1 : 0);
   const highlight =
     script.highlightResult && lines > 0
       ? { startLine: script.startLine, endLine: script.startLine + lines - 1 }
@@ -342,6 +356,21 @@ function render(s: PlayerState, pb: Playback): PlayerState {
       s.reader.to === frame.to &&
       s.reader.cursorAt === frame.cursorAt;
     return same ? s : { ...s, reader: frame };
+  }
+  if (script.kind === "view") {
+    if (phase === "dwell" && s.editor?.filePath !== script.filePath && dwellFraction(s, pb) < CLICK_AT) return s;
+    const range = script.ranges[Math.min(pb.step, script.ranges.length - 1)];
+    const frame = { filePath: script.filePath, agentLabel: ev.agentLabel, text: script.text, cursor: null, note: null };
+    if (phase === "dwell" || phase === "aim") return withEditor({ ...frame, highlight: null, focusLine: range.from });
+    if (phase === "read") {
+      const at = Math.min(range.to, range.from + Math.floor(progress));
+      return withEditor({ ...frame, highlight: { startLine: range.from, endLine: at }, focusLine: at });
+    }
+    return withEditor({ ...frame, highlight: { startLine: range.from, endLine: range.to }, focusLine: range.to });
+  }
+  if (script.kind === "glance") {
+    const glance = phase === "done" ? null : script.paths;
+    return s.glance === glance ? s : { ...s, glance };
   }
   if (script.kind === "text") {
     // A different file only opens once the pointer has clicked it in the tree.
@@ -382,7 +411,7 @@ function dwellFraction(s: PlayerState, pb: Playback): number {
 function startNext(s: PlayerState): PlayerState {
   const [item, ...queue] = s.queue;
   const script = item.script;
-  const alreadyOpen = script.kind === "text" && s.editor?.filePath === script.filePath;
+  const alreadyOpen = (script.kind === "text" || script.kind === "view") && s.editor?.filePath === script.filePath;
   const pb: Playback = { item, script, phase: firstPhase(script), progress: 0, step: 0, alreadyOpen };
   let next: PlayerState = { ...s, queue, current: pb };
   if (script.kind === "instant") {
@@ -398,7 +427,8 @@ function finish(s: PlayerState): PlayerState {
     return { ...s, reader: null, current: null, done: keepLast([...s.done, slim(pb.item.event)]) };
   }
   const rendered = render(s, { ...pb, phase: "done" });
-  return { ...rendered, current: null, done: keepLast([...s.done, slim(pb.item.event)]) };
+  const glance = pb.script.kind === "glance" ? null : rendered.glance;
+  return { ...rendered, glance, current: null, done: keepLast([...s.done, slim(pb.item.event)]) };
 }
 
 function totalForPhase(pb: Playback, busy: boolean, factor = 1): number {
@@ -414,6 +444,10 @@ function totalForPhase(pb: Playback, busy: boolean, factor = 1): number {
     case "delete":
       return script.kind === "text" ? script.oldText.length : 0;
     case "read": {
+      if (script.kind === "view") {
+        const range = script.ranges[pb.step];
+        return range ? range.to - range.from + 1 : 0;
+      }
       if (script.kind !== "read") return 0;
       const step = script.steps[pb.step];
       return step ? step.to - step.from + 1 : 0;
@@ -454,6 +488,12 @@ function nextPhase(pb: Playback): { phase: Phase; step: number } {
   if (pb.script.kind === "read") {
     if (pb.phase === "dwell") return { phase: "read", step: pb.step };
     return pb.step + 1 < pb.script.steps.length ? { phase: "dwell", step: pb.step + 1 } : { phase: "done", step: pb.step };
+  }
+  if (pb.script.kind === "view") {
+    if (pb.phase === "dwell") return { phase: "aim", step: pb.step };
+    if (pb.phase === "aim") return { phase: "read", step: pb.step };
+    if (pb.phase === "read") return pb.step + 1 < pb.script.ranges.length ? { phase: "aim", step: pb.step + 1 } : { phase: "hold", step: pb.step };
+    return { phase: "done", step: pb.step };
   }
   return { phase: nextTextPhase(pb), step: pb.step };
 }
@@ -504,8 +544,15 @@ function remainingWork(s: PlayerState): { chars: number; fixedMs: number } {
       if (pb.phase === "dwell" || pb.phase === "aim") fixedMs += BUSY_PAUSE_MS;
       if (pb.phase !== "hold") fixedMs += BUSY_PAUSE_MS;
       fixedMs += BUSY_PAUSE_MS;
-    } else if (script.kind === "diff") {
+    } else if (script.kind === "diff" || script.kind === "glance") {
       fixedMs += BUSY_PAUSE_MS;
+    } else if (script.kind === "view") {
+      for (let i = pb.step; i < script.ranges.length; i++) {
+        const r = script.ranges[i];
+        const reading = i === pb.step && pb.phase === "read";
+        fixedMs += ((r.to - r.from + 1 - (reading ? pb.progress : 0)) / READ_LINES_PER_SEC) * 1000 + (reading ? 0 : BUSY_PAUSE_MS);
+      }
+      if (pb.phase !== "hold") fixedMs += BUSY_PAUSE_MS;
     } else if (script.kind === "shell") {
       if (pb.phase === "type") {
         chars += totalForPhase(pb, true) - pb.progress;
@@ -535,8 +582,10 @@ function prepare(event: LiveEvent, enqueuedAt: number): Queued {
   if (script.kind === "text") {
     chars = script.newText.length + script.oldText.length / 4;
     fixedMs = 3 * BUSY_PAUSE_MS;
-  } else if (script.kind === "diff") {
+  } else if (script.kind === "diff" || script.kind === "glance") {
     fixedMs = BUSY_PAUSE_MS;
+  } else if (script.kind === "view") {
+    fixedMs = 2 * BUSY_PAUSE_MS + readCost(script.ranges.map((r) => ({ path: script.filePath, ...r })));
   } else if (script.kind === "shell" && event.kind === "shell") {
     chars = event.command.length;
     if (event.status !== "running") fixedMs = outputMs(event);
@@ -546,7 +595,7 @@ function prepare(event: LiveEvent, enqueuedAt: number): Queued {
 
 export type PhaseInfo = {
   key: string;
-  kind: "text" | "diff" | "shell" | "instant" | "read";
+  kind: Script["kind"];
   filePath: string | null;
   /** For text edits: where the edit happens (for the pointer's aim). */
   editLine: number | null;
@@ -571,17 +620,29 @@ export function currentPhase(s: PlayerState): PhaseInfo | null {
     key: pb.item.event.key,
     kind: script.kind,
     filePath:
-      script.kind === "text" || script.kind === "diff"
+      script.kind === "text" || script.kind === "diff" || script.kind === "view"
         ? script.filePath
+        : script.kind === "glance"
+          ? script.paths[0]
         : script.kind === "read"
           ? script.steps[Math.min(pb.step, script.steps.length - 1)].path
           : null,
     alreadyOpen: pb.alreadyOpen,
-    editLine: script.kind === "text" ? positionOf(script.before, script.offset + script.oldText.length).line : null,
-    editColumn: script.kind === "text" ? positionOf(script.before, script.offset + script.oldText.length).column : null,
+    editLine:
+      script.kind === "text"
+        ? positionOf(script.before, script.offset + script.oldText.length).line
+        : script.kind === "view"
+          ? script.ranges[Math.min(pb.step, script.ranges.length - 1)].from
+          : null,
+    editColumn: script.kind === "text" ? positionOf(script.before, script.offset + script.oldText.length).column : script.kind === "view" ? 0 : null,
     reviewId: script.kind === "read" ? script.reviewId : null,
     readMode: script.kind === "read" ? script.mode : null,
-    cursorAt: script.kind === "read" ? s.reader?.cursorAt ?? null : null,
+    cursorAt:
+      script.kind === "read"
+        ? s.reader?.cursorAt ?? null
+        : script.kind === "view" && (pb.phase === "read" || pb.phase === "hold")
+          ? s.editor?.focusLine ?? null
+          : null,
     phase: pb.phase,
     fraction: total > 0 ? Math.min(1, pb.progress / total) : 1,
   };
@@ -633,6 +694,7 @@ export function visibleChanged(a: PlayerState, b: PlayerState): boolean {
     a.reader !== b.reader ||
     a.terminal !== b.terminal ||
     a.touched !== b.touched ||
+    a.glance !== b.glance ||
     a.queue.length !== b.queue.length ||
     a.current?.item.event.key !== b.current?.item.event.key ||
     a.paused !== b.paused ||

@@ -12,6 +12,8 @@ type Props = {
   root: string | null;
   capped: boolean;
   touched: string[];
+  /** Files a search just listed: pulsed for a moment. */
+  glance?: string[] | null;
   activePath: string | null;
   onSelect(path: string): void;
 };
@@ -22,21 +24,24 @@ function ancestors(path: string, root: string | null): string[] {
   return parts.map((_, i) => `${root}/${parts.slice(0, i + 1).join("/")}`);
 }
 
-export const FileTree = memo(function FileTree({ theme, tree, root, capped, touched, activePath, onSelect }: Props) {
+export const FileTree = memo(function FileTree({ theme, tree, root, capped, touched, glance, activePath, onSelect }: Props) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const registerSpot = useContext(PointerContext);
   const scrollRef = useRef<ScrollView>(null);
   const contentRef = useRef<View>(null);
   const rowRefs = useRef(new Map<string, View>()).current;
 
-  // Reveal the file the agent is working on.
+  // Reveal the file the agent is working on (or the files a search listed).
+  const revealPaths = glance && glance.length > 0 ? glance : activePath ? [activePath] : [];
+  const revealKey = revealPaths.join("\n");
   useEffect(() => {
-    if (!activePath) return;
-    const dirs = ancestors(activePath, root);
+    if (revealPaths.length === 0) return;
+    const first = revealPaths[0];
+    const dirs = revealPaths.flatMap((p) => ancestors(p, root));
     setOpen((prev) => (dirs.every((d) => prev.has(d)) ? prev : new Set([...prev, ...dirs])));
     // Then bring its row into view, so the pointer lands inside the tree.
     const timer = setTimeout(() => {
-      const row = rowRefs.get(activePath);
+      const row = rowRefs.get(first);
       const content = contentRef.current;
       if (!row || !content) return;
       row.measureLayout(
@@ -46,15 +51,17 @@ export const FileTree = memo(function FileTree({ theme, tree, root, capped, touc
       );
     }, 30);
     return () => clearTimeout(timer);
-  }, [activePath, root]);
+  }, [revealKey, root]);
 
   const touchedSet = new Set(touched);
+  const glanceSet = new Set(glance ?? []);
   const outside = touched.filter((p) => !root || !p.startsWith(root + "/"));
 
   const row = (node: TreeNode, depth: number) => {
     const isDir = node.children !== undefined;
     const isOpen = open.has(node.path);
     const active = node.path === activePath;
+    const glanced = glanceSet.has(node.path);
     return (
       <View key={node.path}>
         <Pressable
@@ -88,7 +95,9 @@ export const FileTree = memo(function FileTree({ theme, tree, root, capped, touc
             paddingVertical: 3,
             paddingLeft: 8 + depth * 12,
             paddingRight: 8,
-            backgroundColor: active ? theme.colors.surface2 : "transparent",
+            backgroundColor: active || glanced ? theme.colors.surface2 : "transparent",
+            borderLeftWidth: 2,
+            borderLeftColor: glanced ? theme.colors.accent : "transparent",
           }}
         >
           <Text style={{ color: theme.colors.foregroundMuted, width: 12, fontSize: 10 }}>

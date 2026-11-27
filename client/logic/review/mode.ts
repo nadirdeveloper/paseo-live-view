@@ -7,12 +7,12 @@ import type { ReviewState } from "./state";
  */
 export function displayMode(
   state: ReviewState,
-  playing: "text" | "diff" | "read" | "shell" | "instant" | null,
+  playing: "text" | "diff" | "read" | "view" | "glance" | "shell" | "instant" | null,
   lastStartedKey: string | null,
   lastPlayed: "code" | "review" | null,
 ): "code" | "review" {
   if (state.manual && lastStartedKey === state.manualKey) return state.mode;
   if (playing === "read") return "review";
-  if (playing === "text" || playing === "diff") return "code";
+  if (playing === "text" || playing === "diff" || playing === "view" || playing === "glance") return "code";
   return lastPlayed ?? state.mode;
 }

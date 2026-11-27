@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { EditEvent, ShellEvent } from "./events";
+import type { EditEvent, LiveEvent, ShellEvent } from "./events";
 import { createPlayer, enqueue, tick, type PlayerState } from "./player";
 import { pointerTarget } from "./pointer";
 
@@ -51,5 +51,20 @@ describe("pointerTarget", () => {
     const ev = shell("node --test");
     const s = tick(enqueue(createPlayer(), ev), 10);
     expect(pointerTarget(s)).toEqual({ kind: "terminal", key: ev.key });
+  });
+
+  test("a view clicks the file, then aims at and clicks the first line read", () => {
+    const view: LiveEvent = { ...base(), kind: "view", filePath: "/w/r.js", text: "a\nb\nc\nd\n", ranges: [{ from: 3, to: 4 }] };
+    let s = tick(enqueue(createPlayer(), view), 10);
+    expect(pointerTarget(s)).toEqual({ kind: "tree", path: "/w/r.js", click: false });
+    s = until(s, (x) => x.current?.phase === "aim" && pointerTarget(x)?.kind === "editor" && (pointerTarget(x) as { click?: boolean }).click === true);
+    expect(pointerTarget(s)).toEqual({ kind: "editor", path: "/w/r.js", line: 3, column: 0, click: true });
+    s = until(s, (x) => x.current?.phase === "read");
+    expect(pointerTarget(s)).toMatchObject({ kind: "editor", path: "/w/r.js", line: 3 });
+  });
+
+  test("a glance points at the first file in the tree", () => {
+    const glance: LiveEvent = { ...base(), kind: "glance", paths: ["/w/a.css", "/w/b.css"] };
+    expect(pointerTarget(tick(enqueue(createPlayer(), glance), 10))).toEqual({ kind: "tree", path: "/w/a.css", click: false });
   });
 });

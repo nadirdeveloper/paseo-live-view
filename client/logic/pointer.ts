@@ -32,6 +32,15 @@ export function pointerTarget(s: PlayerState): PointerTarget | null {
     return { kind: "diff", line: info.cursorAt ?? 1 };
   }
   if (info.kind === "shell" || info.kind === "instant") return { kind: "terminal", key: info.key };
+  if (info.kind === "glance") return { kind: "tree", path: info.filePath!, click: false };
+  if (info.kind === "view") {
+    const path = info.filePath!;
+    const at = { kind: "editor" as const, path, line: info.editLine ?? 1, column: 0 };
+    if (info.phase === "dwell") return info.alreadyOpen ? { ...at, click: false } : { kind: "tree", path, click: info.fraction >= CLICK_AT };
+    if (info.phase === "aim") return { ...at, click: info.fraction >= AIM_CLICK_AT };
+    // Reading: the pointer follows the line being read.
+    return { ...at, line: info.cursorAt ?? at.line };
+  }
   const path = info.filePath!;
   if (info.kind === "text" && (info.phase === "dwell" || info.phase === "aim")) {
     const at = { kind: "editor" as const, path, line: info.editLine ?? 1, column: info.editColumn ?? 0 };

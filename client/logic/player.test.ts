@@ -269,3 +269,67 @@ describe("history", () => {
     expect(s.done).toHaveLength(3);
   });
 });
+
+describe("views and glances", () => {
+  const fileText = Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n") + "\n";
+  const view = (ranges: { from: number; to: number }[], filePath = "/w/read.js"): LiveEvent => ({
+    ...base(), kind: "view", filePath, text: fileText, ranges,
+  });
+  const glance = (paths: string[]): LiveEvent => ({ ...base(), kind: "glance", paths });
+  const until = (s: PlayerState, done: (s: PlayerState) => boolean, step = 10) => {
+    for (let i = 0; i < 5000 && !done(s); i++) s = tick(s, step);
+    return s;
+  };
+
+  test("a view opens the file only after the tree click, then highlights the lines as they're read", () => {
+    let s = tick(enqueue(createPlayer(), view([{ from: 5, to: 9 }])), 10);
+    expect(s.current?.phase).toBe("dwell");
+    expect(s.editor).toBeNull();
+    s = until(s, (x) => x.current?.phase === "aim");
+    expect(s.editor).toMatchObject({ filePath: "/w/read.js", text: fileText, highlight: null, focusLine: 5 });
+    s = until(s, (x) => x.current?.phase === "read");
+    s = tick(s, 80);
+    expect(s.editor?.highlight?.startLine).toBe(5);
+    expect(s.editor!.highlight!.endLine).toBeGreaterThanOrEqual(5);
+    expect(s.editor!.highlight!.endLine).toBeLessThan(9);
+    s = until(s, (x) => !x.current);
+    expect(s.editor?.highlight).toEqual({ startLine: 5, endLine: 9 });
+  });
+
+  test("a view of the file already on screen skips the tree", () => {
+    let s = run(enqueue(createPlayer(), view([{ from: 1, to: 2 }])), 5000);
+    s = tick(enqueue(s, view([{ from: 3, to: 4 }])), 10);
+    expect(s.current?.alreadyOpen).toBe(true);
+  });
+
+  test("two ranges are read in order", () => {
+    let s = tick(enqueue(createPlayer(), view([{ from: 2, to: 3 }, { from: 20, to: 22 }])), 10);
+    s = until(s, (x) => x.current?.phase === "read" && x.current.step === 1);
+    expect(s.editor?.highlight?.startLine).toBe(20);
+    expect(s.editor?.focusLine).toBeGreaterThanOrEqual(20);
+  });
+
+  test("a view does not mark the file as changed", () => {
+    expect(enqueue(createPlayer(), view([{ from: 1, to: 1 }])).touched).toEqual([]);
+  });
+
+  test("a glance shows its files while playing and clears them after", () => {
+    let s = tick(enqueue(createPlayer(), glance(["/w/a.css", "/w/b.css"])), 10);
+    expect(s.glance).toEqual(["/w/a.css", "/w/b.css"]);
+    s = until(s, (x) => !x.current);
+    expect(s.glance).toBeNull();
+  });
+
+  test("catch-up shortens a long view when more work is waiting", () => {
+    const long = () => view([{ from: 1, to: 30 }]);
+    const calm = timeToDrain(enqueue(createPlayer(), long()));
+    let busy = createPlayer();
+    for (let i = 0; i < 8; i++) busy = enqueue(busy, long());
+    expect(timeToDrain(busy) / 8).toBeLessThan(calm);
+  });
+
+  test("a typed edit ending in a line break highlights only its own lines", () => {
+    const s = run(enqueue(createPlayer(), edit("a\nB\nc\n", "b\n", "B\n")), 5000);
+    expect(s.editor?.highlight).toEqual({ startLine: 2, endLine: 2 });
+  });
+});
