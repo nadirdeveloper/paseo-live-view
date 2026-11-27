@@ -198,6 +198,7 @@ function buildScript(ev: LiveEvent): Script {
     oldString: ev.oldString,
     newString: ev.newString,
     unifiedDiff: ev.unifiedDiff,
+    hintLine: ev.line,
   });
   if (rec.mode === "diff-only") {
     const lines = rec.changedLines;

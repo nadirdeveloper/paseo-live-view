@@ -19,6 +19,8 @@ export type EditEvent = EventBase & {
   newString?: string;
   unifiedDiff?: string;
   afterText?: string | null;
+  /** 1-based line where `newString` starts in `afterText`, when known (picks between repeated text). */
+  line?: number;
 };
 
 export type WriteEvent = EventBase & {
