@@ -58,7 +58,7 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
   const lastStartedKey = useRef<string | null>(null);
   if (phase) lastStartedKey.current = phase.key;
   if (playing === "read") lastPlayed.current = "review";
-  else if (playing === "text" || playing === "diff") lastPlayed.current = "code";
+  else if (playing === "text" || playing === "diff" || playing === "view" || playing === "glance") lastPlayed.current = "code";
   // These remember things about the lane on screen; start fresh when switching to another agent.
   const shownLane = useRef(feed.selectedId);
   if (shownLane.current !== feed.selectedId) {
@@ -157,6 +157,7 @@ export function LiveViewPanel({ theme, layout, workspaceId }: PluginWorkspacePan
       root={feed.files.root}
       capped={feed.files.capped}
       touched={player.touched}
+      glance={player.glance}
       activePath={activePath}
       onSelect={openFile}
     />

@@ -19,6 +19,8 @@ export type EditEvent = EventBase & {
   newString?: string;
   unifiedDiff?: string;
   afterText?: string | null;
+  /** 1-based line where `newString` starts in `afterText`, when known (picks between repeated text). */
+  line?: number;
 };
 
 export type WriteEvent = EventBase & {
@@ -60,7 +62,37 @@ export type SubagentEvent = EventBase & {
   subAgentType?: string;
 };
 
-export type LiveEvent = EditEvent | WriteEvent | ShellEvent | SubagentEvent | ReadEvent | ThoughtEvent;
+/** A Grep / Glob / search tool call. */
+export type SearchEvent = EventBase & {
+  kind: "search";
+  toolName: "grep" | "glob" | "search" | "web_search";
+  query: string;
+  content?: string;
+  /** Absolute paths of matched files, when the tool lists them. */
+  filePaths: string[];
+  mode?: "content" | "files_with_matches" | "count";
+};
+
+/** Any other tool (NotebookEdit, MCP tools…): nothing to show itself, but it may have changed files. */
+export type OtherToolEvent = EventBase & { kind: "other"; name: string; input: Record<string, unknown> };
+
+/** A file the agent read, shown in the code editor (made by the feed from reads, commands and searches). */
+export type ViewEvent = EventBase & { kind: "view"; filePath: string; text: string; ranges: { from: number; to: number }[] };
+
+/** Files a search listed, pulsed in the file tree (made by the feed). */
+export type GlanceEvent = EventBase & { kind: "glance"; paths: string[] };
+
+export type LiveEvent =
+  | EditEvent
+  | WriteEvent
+  | ShellEvent
+  | SubagentEvent
+  | ReadEvent
+  | ThoughtEvent
+  | SearchEvent
+  | OtherToolEvent
+  | ViewEvent
+  | GlanceEvent;
 
 export type EventContext = {
   agentId: string;
@@ -182,6 +214,21 @@ export function toLiveEvent(item: AgentTimelineItem, ctx: EventContext): LiveEve
         offset: detail.offset ?? null,
         limit: detail.limit ?? null,
       };
+    case "search":
+      return {
+        ...base,
+        kind: "search",
+        toolName: detail.toolName ?? "search",
+        query: detail.query,
+        content: detail.content,
+        filePaths: (detail.filePaths ?? []).map((p) => absolutePath(p, ctx.agentCwd)),
+        mode: detail.mode,
+      };
+    case "unknown":
+    case "plain_text": {
+      const input = detail.type === "unknown" && detail.input && typeof detail.input === "object" ? (detail.input as Record<string, unknown>) : {};
+      return { ...base, kind: "other", name: item.name, input };
+    }
     case "sub_agent":
       return {
         ...base,

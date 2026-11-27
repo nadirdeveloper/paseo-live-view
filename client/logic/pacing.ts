@@ -39,6 +39,10 @@ export function eventChars(ev: LiveEvent): number {
     case "subagent":
     case "read":
     case "thought":
+    case "search":
+    case "other":
+    case "view":
+    case "glance":
       return 0;
   }
 }

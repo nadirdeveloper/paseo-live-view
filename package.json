@@ -1,6 +1,6 @@
 {
   "name": "paseo-live-view",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Watch your Paseo agents work like a VS Code screen: live file edits with a moving pointer, a terminal of every command, PR review mode with pinned findings, and a separate replay for each subagent.",
   "license": "MIT",
   "author": "nadirdeveloper",

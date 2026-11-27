@@ -54,4 +54,20 @@ describe("entryToEvents", () => {
   test("other tools are ignored", () => {
     expect(entryToEvents(tool("WebFetch", { url: "x" }, "y"), ctx)).toEqual([]);
   });
+  test("Grep with matching lines becomes a search with its output", () => {
+    expect(entryToEvents(tool("Grep", { pattern: "pick", output_mode: "content", "-n": true }, "script.js:33:pick"), ctx)).toMatchObject([
+      { kind: "search", toolName: "grep", query: "pick", content: "script.js:33:pick", mode: "content", filePaths: [] },
+    ]);
+  });
+
+  test("Grep listing files and Glob give file paths", () => {
+    expect(entryToEvents(tool("Grep", { pattern: "x" }, "a.js\nsub/b.js"), ctx)[0]).toMatchObject({ mode: "files_with_matches", filePaths: ["/w/a.js", "/w/sub/b.js"] });
+    expect(entryToEvents(tool("Glob", { pattern: "**/*.css" }, "/w/styles.css\n"), ctx)[0]).toMatchObject({ kind: "search", toolName: "glob", filePaths: ["/w/styles.css"] });
+  });
+
+  test("other tools such as NotebookEdit become other-tool events", () => {
+    expect(entryToEvents(tool("NotebookEdit", { notebook_path: "/w/a.ipynb" }, "ok"), ctx)).toMatchObject([
+      { kind: "other", name: "NotebookEdit", input: { notebook_path: "/w/a.ipynb" }, status: "completed" },
+    ]);
+  });
 });
