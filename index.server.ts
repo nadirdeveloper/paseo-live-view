@@ -16,10 +16,10 @@ async function workspaceDir(paseo: PluginHandlerContext["paseo"], workspaceId: s
 export default function contribute(server: PluginServerContext) {
   // Copies of workspace text files, so edits made by shell commands can be replayed (memory only).
   const snapshots = createSnapshots();
-  server.handle(filesListRpc, async ({ workspaceId }, { paseo }) => {
+  server.handle(filesListRpc, async ({ workspaceId, rebaseline }, { paseo }) => {
     const root = await workspaceDir(paseo, workspaceId);
     const listed = await listFiles(root);
-    snapshots.prime(root).catch((error) => console.error("[live-view] snapshot failed", error));
+    (rebaseline ? snapshots.rebaseline(root) : snapshots.prime(root)).catch((error) => console.error("[live-view] snapshot failed", error));
     return { root, ...listed };
   });
   server.handle(filesReadRpc, async ({ workspaceId, path }, { paseo }) => {

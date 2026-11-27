@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, realpath, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, test } from "vitest";
@@ -94,5 +94,46 @@ describe("createSnapshots", () => {
     await put("b.txt", "BBBBBB");
     // Only one of the two fit in the snapshot, so only one change can be reported.
     expect(await snaps.changes(root)).toHaveLength(1);
+  });
+
+  test("rebaseline() forgets changes made while nobody was watching", async () => {
+    await put("a.txt", "one\n");
+    const snaps = createSnapshots();
+    await snaps.prime(root);
+    await put("a.txt", "two\n");
+    await snaps.rebaseline(root);
+    expect(await snaps.changes(root)).toEqual([]);
+    const path = await put("a.txt", "three\n");
+    expect(await snaps.changes(root)).toEqual([{ path, before: "two\n", after: "three\n" }]);
+  });
+
+  test("reports paths under the root as it was given, even through a symlink", async () => {
+    const link = join(await realpath(await mkdtemp(join(tmpdir(), "live-view-link-"))), "ws");
+    await symlink(root, link);
+    await put("a.txt", "one\n");
+    const snaps = createSnapshots();
+    await snaps.prime(link);
+    await put("a.txt", "two\n");
+    expect(await snaps.changes(link)).toEqual([{ path: join(link, "a.txt"), before: "one\n", after: "two\n" }]);
+  });
+
+  test("remember() accepts the real path of a file under a symlinked root", async () => {
+    const link = join(await realpath(await mkdtemp(join(tmpdir(), "live-view-link-"))), "ws");
+    await symlink(root, link);
+    const real = await put("a.txt", "one\n");
+    const snaps = createSnapshots();
+    await snaps.prime(link);
+    await put("a.txt", "two\n");
+    snaps.remember(link, real, "two\n");
+    expect(await snaps.changes(link)).toEqual([]);
+  });
+
+  test("reports at most maxChanges files per check and quietly takes in the rest", async () => {
+    for (const name of ["a", "b", "c"]) await put(`${name}.txt`, "1\n");
+    const snaps = createSnapshots({ maxChanges: 2 });
+    await snaps.prime(root);
+    for (const name of ["a", "b", "c"]) await put(`${name}.txt`, "2\n");
+    expect(await snaps.changes(root)).toHaveLength(2);
+    expect(await snaps.changes(root)).toEqual([]);
   });
 });

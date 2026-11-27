@@ -3,7 +3,8 @@ import { z } from "zod";
 
 export const filesListRpc = defineRpc({
   name: "files.list",
-  input: z.object({ workspaceId: z.string() }),
+  /** rebaseline: the panel just opened, so changes made before now are not "new" (they are history). */
+  input: z.object({ workspaceId: z.string(), rebaseline: z.boolean().optional() }),
   output: z.object({ root: z.string(), paths: z.array(z.string()), capped: z.boolean() }),
 });
 

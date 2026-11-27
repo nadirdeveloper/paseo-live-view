@@ -276,11 +276,12 @@ export function parseMultiFileHits(output: string): Map<string, LineSpec> {
   return out;
 }
 
-function singleFileHits(output: string): LineSpec | null {
+/** Hits printed for one file: `N:text` when line numbers were asked for, else the matching lines themselves. */
+function singleFileHits(output: string, numbered: boolean): LineSpec | null {
   const lines = output.split("\n").filter((l) => l && l !== "--");
   if (lines.length === 0) return null;
-  const numbered = lines.map((l) => /^(\d+)[:-]/.exec(l));
-  if (numbered.every(Boolean)) return { lines: numbered.map((m) => Number(m![1])) };
+  const found = numbered ? lines.map((l) => /^(\d+)[:-]/.exec(l)) : [];
+  if (numbered && found.every(Boolean)) return { lines: found.map((m) => Number(m![1])) };
   return { match: lines.slice(0, MAX_MATCHES) };
 }
 
@@ -303,7 +304,7 @@ function grep(name: string, args: string[], output: string | undefined): GrepRes
   const lines = text.split("\n").filter(Boolean);
   const single = only !== null && (!recursive || (isRg && !lines.every((l) => l.startsWith(`${only}/`))));
   if (single) {
-    const spec = singleFileHits(text);
+    const spec = singleFileHits(text, has("n", "--line-number"));
     return spec ? { reads: [{ path: only!, specs: [spec] }], glance: [] } : null;
   }
   const hits = parseMultiFileHits(text);
@@ -374,7 +375,7 @@ export function readTargets(ev: LiveEvent, cwd: string): { reads: ReadTarget[]; 
       if (ev.mode === "content" && ev.content) {
         let reads = [...parseMultiFileHits(ev.content)].map(([path, spec]) => ({ path: absolutePath(path, cwd), specs: [spec] }));
         if (reads.length === 0 && ev.filePaths.length === 1) {
-          const spec = singleFileHits(ev.content);
+          const spec = singleFileHits(ev.content, true);
           reads = spec ? [{ path: ev.filePaths[0], specs: [spec] }] : [];
         }
         return { reads: mergeTargets(reads), glance: [] };

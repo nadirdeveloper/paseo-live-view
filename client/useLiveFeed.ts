@@ -3,7 +3,7 @@ import { useAgent, useAgents, usePaseo, useRpc, useWorkspace } from "@getpaseo/p
 import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { filesChangesRpc, filesListRpc, filesReadRpc, type FilesReadOutput } from "../shared/files";
 import { emptyLog, forLog, isInside, pushHistory, toLiveEvent, upsertEvent, type EventLog, type LiveEvent } from "./logic/events";
-import { afterCall } from "./logic/feedPlan";
+import { MAX_TYPED_FILES, afterCall, alreadyShown } from "./logic/feedPlan";
 import { changeToEvents } from "./logic/fsChanges";
 import { readTargets, resolveSpecs } from "./logic/readTargets";
 import { buildTree, type TreeNode } from "./logic/fileTree";
@@ -113,6 +113,8 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   const [files, setFiles] = useState<LiveFeed["files"]>({ tree: [], capped: false, root: null });
   const [filesVersion, setFilesVersion] = useState(0);
   const knownPaths = useRef<Set<string>>(new Set());
+  /** File text a change check typed in, so the Edit that made it (arriving later) isn't typed again. */
+  const shownText = useRef(new Map<string, string>());
 
   const infos = () => [...lanesRef.current.values()].map((l) => l.info);
   const selectedIdRef = useRef<string | null>(null);
@@ -176,15 +178,20 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   useEffect(() => {
     lanesRef.current = new Map();
     logRef.current = emptyLog;
+    shownText.current.clear();
     setRequests([]);
     setSelection("main");
     bump();
     notifyThoughts();
   }, [workspaceId]);
 
+  /** The workspace whose file copies this panel has re-baselined (once per mount and workspace). */
+  const baselined = useRef<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    listFiles({ workspaceId })
+    const rebaseline = baselined.current !== workspaceId;
+    baselined.current = workspaceId;
+    listFiles({ workspaceId, rebaseline })
       .then((result) => {
         if (cancelled) return;
         knownPaths.current = new Set(result.paths.map((p) => `${result.root}/${p}`));
@@ -290,13 +297,19 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
       if (plan.checkChanges) {
         try {
           const { changes } = await changesRpc({ workspaceId });
-          let newPath = false;
+          let treeChanged = false;
+          let typed = 0;
           for (const change of changes) {
             if (!isInside(change.path, workspaceDir)) continue;
-            if (change.after !== null && !knownPaths.current.has(change.path)) newPath = true;
+            if (change.after === null ? knownPaths.current.has(change.path) : !knownPaths.current.has(change.path)) treeChanged = true;
+            if (change.after === null || typed >= MAX_TYPED_FILES) continue;
+            typed++;
+            shownText.current.set(change.path, change.after);
             for (const next of changeToEvents(change, base)) play(next);
+            // Diffing can take a moment on big files; let the panel draw between files.
+            await new Promise((resolve) => setTimeout(resolve, 0));
           }
-          if (newPath) refreshFiles();
+          if (treeChanged) refreshFiles();
         } catch (error) {
           console.error("[live-view] files.changes failed", error);
         }
@@ -406,7 +419,10 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
               }
             }
             lane().seen.add(ev.key);
-            updatePlayer(laneId, (s) => enqueue(s, { ...ev, afterText }));
+            const played = { ...ev, afterText };
+            // Already typed in from another command's change check: don't type it twice.
+            if (alreadyShown(shownText.current, played)) return;
+            updatePlayer(laneId, (s) => enqueue(s, played));
             return;
           }
           lane().seen.add(ev.key);

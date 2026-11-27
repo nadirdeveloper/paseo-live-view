@@ -60,6 +60,10 @@ describe("readTargets: shell commands", () => {
     ]);
   });
 
+  test("grep without -n doesn't take a line's leading digits for a line number", () => {
+    expect(reads("grep ERROR app.log", "2024-01-01 ERROR boom")).toEqual([{ path: "/w/app.log", specs: [{ match: ["2024-01-01 ERROR boom"] }] }]);
+  });
+
   test("recursive grep and rg group hits by file", () => {
     expect(reads("grep -rn pick .", "./script.js:32:function pick\n./tests/logic.test.js:5:pick()\n./script.js:40:pick")).toEqual([
       { path: "/w/script.js", specs: [{ lines: [32, 40] }] },
