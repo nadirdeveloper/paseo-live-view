@@ -14,6 +14,18 @@ function stripLineNumbers(text: string): string {
   return lines.map((l) => l.replace(numbered, "")).join("\n");
 }
 
+/** Tools that never touch workspace files. */
+const IGNORED_TOOLS = new Set(["WebFetch", "WebSearch", "TodoWrite", "ExitPlanMode"]);
+
+/** Non-empty result lines as absolute paths. */
+function pathLines(result: string | undefined, cwd: string): string[] {
+  return (result ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => absolutePath(l, cwd));
+}
+
 /** One subagent transcript entry → the same LiveEvents the main agent produces. */
 export function entryToEvents(entry: Entry, ctx: MapperContext): LiveEvent[] {
   const base = { agentId: ctx.laneId, agentLabel: ctx.agentLabel, at: new Date().toISOString() };
@@ -98,7 +110,28 @@ export function entryToEvents(entry: Entry, ctx: MapperContext): LiveEvent[] {
           subAgentType: str(input.subagent_type),
         },
       ];
+    case "Grep": {
+      const mode = (str(input.output_mode) ?? "files_with_matches") as "content" | "files_with_matches" | "count";
+      return [
+        {
+          ...base,
+          key,
+          status,
+          kind: "search",
+          toolName: "grep",
+          query: str(input.pattern) ?? "",
+          content: entry.result,
+          filePaths: mode === "files_with_matches" ? pathLines(entry.result, ctx.agentCwd) : [],
+          mode,
+        },
+      ];
+    }
+    case "Glob":
+      return [
+        { ...base, key, status, kind: "search", toolName: "glob", query: str(input.pattern) ?? "", filePaths: pathLines(entry.result, ctx.agentCwd) },
+      ];
     default:
-      return [];
+      if (IGNORED_TOOLS.has(entry.name)) return [];
+      return [{ ...base, key, status, kind: "other", name: entry.name, input }];
   }
 }

@@ -77,9 +77,31 @@ describe("toLiveEvent", () => {
     expect(ev).toMatchObject({ kind: "subagent", description: "Explore", actions: ["Read script.js", "Bash"] });
   });
 
-  test("searches and user messages are ignored", () => {
-    expect(toLiveEvent(toolCall({ type: "search", query: "x" }), ctx)).toBeNull();
+  test("user messages and web fetches are ignored", () => {
     expect(toLiveEvent({ type: "user_message", text: "hi" } as AgentTimelineItem, ctx)).toBeNull();
+    expect(toLiveEvent(toolCall({ type: "fetch", url: "https://x" }), ctx)).toBeNull();
+  });
+
+  test("a grep search keeps its matches, with file paths resolved", () => {
+    const ev = toLiveEvent(
+      toolCall({ type: "search", query: "pick", toolName: "grep", content: "script.js:33:pick", filePaths: ["script.js"], mode: "content" }),
+      ctx,
+    );
+    expect(ev).toMatchObject({ kind: "search", toolName: "grep", query: "pick", content: "script.js:33:pick", filePaths: ["/w/script.js"], mode: "content" });
+  });
+
+  test("a search without a tool name or files still maps", () => {
+    expect(toLiveEvent(toolCall({ type: "search", query: "x" }), ctx)).toMatchObject({ kind: "search", toolName: "search", filePaths: [] });
+  });
+
+  test("an unknown tool becomes an other-tool event with its name and input", () => {
+    const item = { ...toolCall({ type: "unknown", input: { notebook_path: "/w/a.ipynb" }, output: null }), name: "NotebookEdit" } as AgentTimelineItem;
+    expect(toLiveEvent(item, ctx)).toMatchObject({ kind: "other", name: "NotebookEdit", input: { notebook_path: "/w/a.ipynb" } });
+  });
+
+  test("a plain-text tool becomes an other-tool event with no input", () => {
+    const item = { ...toolCall({ type: "plain_text", text: "done" }), name: "mcp__fs__write_file" } as AgentTimelineItem;
+    expect(toLiveEvent(item, ctx)).toMatchObject({ kind: "other", name: "mcp__fs__write_file", input: {} });
   });
 });
 
