@@ -6,6 +6,10 @@ Agents write each edit in one step, so Live View replays edits after they happen
 
 It follows every agent in the workspace and labels each change with the agent that made it. When you open the panel, recent activity appears straight away without animation; only new activity is replayed.
 
+## Every read and write
+
+Not every agent edits with an edit tool. Files read with `cat`, `head`, `tail`, `sed -n`, `grep`, `rg`, `awk` or `bat`, with the Read or Grep tools, or with MCP file tools open in the editor: the pointer clicks the file and the first line read, and a reading highlight runs over the lines. Files a Glob search lists light up in the file tree. When a shell command or another tool (a `python3` heredoc, `sed -i`, `perl -pi`, `cat >`, a script, MultiEdit, NotebookEdit) changes files in the workspace, Live View finds what changed and types it in like any other edit. Very large changes are highlighted instead of typed.
+
 ## Review mode
 
 When an agent reviews a pull request (for example with a review skill that runs `gh pr diff`), Live View switches to Review mode on its own. A Code / Review switch at the top lets you flip back and forth; once you use it, automatic switching waits until the next review.
@@ -32,13 +36,14 @@ For Claude Code subagents, Live View reads the subagent's own log, which Claude 
 - The activity history of the agents in the current workspace: edits, file writes, shell commands, file reads, reasoning, messages, and sub-agent calls.
 - Claude Code subagent logs and their info files, as described above (read-only).
 - Files inside the workspace folder, to show the file list and the file around each edit. It never reads files outside the workspace folder, and it skips binary files and files over 1 MiB.
+- To show edits made by shell commands, Live View keeps an in-memory copy of the workspace's text files (up to 64 MiB in total) on your machine. It is never written to disk or sent anywhere, and it is dropped when Paseo restarts.
 
 Live View is read-only. It does not change files or run commands, and it sends nothing anywhere: no data leaves your machine and nothing is sent to agent providers. Everything it shows comes from activity Paseo already has and files on your own disk.
 
 ## Limits
 
-- No syntax colouring.
 - Very long command output is trimmed to the last 200 lines.
-- Edits made inside Claude Code's own built-in sub-agents appear as a single line rather than a replay.
+- Reads and edits from shell commands are shown only for activity that happens while Live View is open; older history shows them in the terminal only.
+- Files outside the workspace folder appear in the terminal only.
 - If a file changed again before an edit could be replayed, that edit is shown on its own with a note instead of in place.
 - Requires Paseo 0.17.4 or later.

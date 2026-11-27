@@ -14,6 +14,7 @@ Watch your [Paseo](https://paseo.sh) agents work like a VS Code screen. Live Vie
 
 - **Edit replay.** The pointer clicks the file in the tree, then the line; the change is typed in with a cursor, syntax-coloured, and highlighted. Replays run in slow motion when things are calm and speed up so they stay within about 15 seconds of the agent.
 - **Terminal.** Every command the agent runs, typed out, with its output and exit code.
+- **Every read and write.** Files read with `cat`, `head`, `tail`, `sed -n`, `grep`, `rg`, `awk`, `bat`, the Read and Grep tools or MCP file tools open in the editor with a reading highlight on the lines read; Glob results light up in the file tree. Files changed by shell commands (`python3 - <<'EOF'`, `sed -i`, `perl -pi`, `cat >`, scripts), MultiEdit, NotebookEdit or other tools are typed in like any other edit.
 - **Review mode.** When an agent reviews a PR (`gh pr diff`, follow-up reads of a saved diff, whole files fetched at the PR head), Live View switches to a diff view with a reading highlight, a "read so far" bar per file, and the final findings pinned under their lines with a verdict badge. A Code / Review switch lets you flip at any time.
 - **Thinking strip.** The agent's reasoning and messages as short one-line steps.
 - **Subagents.** Each Claude Code subagent gets its own replay. Live View stays on the main agent; a notice with a **Watch** button appears while a subagent works, and a "Watching" dropdown lists the main agent, its subagents and theirs.
@@ -44,7 +45,7 @@ Open it from the Command Center (⌘K → **Open Live View**) or with the **Live
 Live View is read-only. It does not edit files, run commands or send data anywhere. It reads:
 
 - the activity of the agents in the current workspace, which Paseo already has;
-- files inside the workspace folder, to show the file list and the text around each edit;
+- files inside the workspace folder, to show the file list and the text around each edit. To show edits made by shell commands, it keeps an in-memory copy of the workspace's text files (each up to 1 MiB, 64 MiB in total) on your machine; it is never written to disk or sent anywhere;
 - for Claude Code subagents, the subagent's own log and its small info file, only inside the project folder that matches the agent's working directory, in Claude Code config folders (`~/.claude`, `$CLAUDE_CONFIG_DIR`, and other `~/.claude-*` folders that contain a `projects` folder). It opens only logs that match a subagent the agent actually started.
 
 ## Development
