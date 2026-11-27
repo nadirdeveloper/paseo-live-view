@@ -1,8 +1,11 @@
 import type { AgentTimelineItem } from "@getpaseo/protocol/agent-types";
 import { useAgent, useAgents, usePaseo, useRpc, useWorkspace } from "@getpaseo/plugin/client";
 import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { filesListRpc, filesReadRpc, type FilesReadOutput } from "../shared/files";
-import { emptyLog, forLog, pushHistory, toLiveEvent, upsertEvent, type EventLog, type LiveEvent } from "./logic/events";
+import { filesChangesRpc, filesListRpc, filesReadRpc, type FilesReadOutput } from "../shared/files";
+import { emptyLog, forLog, isInside, pushHistory, toLiveEvent, upsertEvent, type EventLog, type LiveEvent } from "./logic/events";
+import { afterCall } from "./logic/feedPlan";
+import { changeToEvents } from "./logic/fsChanges";
+import { readTargets, resolveSpecs } from "./logic/readTargets";
 import { buildTree, type TreeNode } from "./logic/fileTree";
 import type { Speed } from "./logic/pacing";
 import { applyToReview, emptyReview, setMode as setReviewMode, type ReviewEffect, type ReviewState } from "./logic/review/state";
@@ -93,6 +96,7 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
   const agents = useAgents({ where: (a) => a.workspaceId === workspaceId && !a.background });
   const listFiles = useRpc(filesListRpc);
   const readRpc = useRpc(filesReadRpc);
+  const changesRpc = useRpc(filesChangesRpc);
 
   const lanesRef = useRef(new Map<string, Lane>());
   const logRef = useRef<EventLog>(emptyLog);
@@ -265,6 +269,59 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
     [ensureLane, updateLane, workspaceDir],
   );
 
+  /**
+   * After a live tool call finishes: replay files it changed (found by the server's watcher), then show
+   * what it read in the editor. Changes go first: reading a file refreshes the server's copy of it.
+   */
+  const followUp = useCallback(
+    async (laneId: string, ev: LiveEvent, showReads: boolean) => {
+      const lane = lanesRef.current.get(laneId);
+      if (!lane || !workspaceDir) return;
+      const plan = afterCall(ev);
+      const marker = `${ev.key}:after`;
+      if ((!plan.checkChanges && !plan.reads) || lane.seen.has(marker)) return;
+      lane.seen.add(marker);
+      const base = { key: ev.key, agentId: ev.agentId, agentLabel: ev.agentLabel, at: ev.at };
+      const play = (next: LiveEvent) => {
+        if (lane.seen.has(next.key)) return;
+        lane.seen.add(next.key);
+        updatePlayer(laneId, (s) => enqueue(s, next));
+      };
+      if (plan.checkChanges) {
+        try {
+          const { changes } = await changesRpc({ workspaceId });
+          let newPath = false;
+          for (const change of changes) {
+            if (!isInside(change.path, workspaceDir)) continue;
+            if (change.after !== null && !knownPaths.current.has(change.path)) newPath = true;
+            for (const next of changeToEvents(change, base)) play(next);
+          }
+          if (newPath) refreshFiles();
+        } catch (error) {
+          console.error("[live-view] files.changes failed", error);
+        }
+      }
+      if (plan.reads && showReads) {
+        const { reads, glance } = readTargets(ev, lane.cwd || workspaceDir);
+        for (const target of reads) {
+          if (!isInside(target.path, workspaceDir)) continue;
+          try {
+            const result = await readRpc({ workspaceId, path: target.path });
+            if (result.status !== "ok") continue;
+            const ranges = resolveSpecs(target.specs, result.text);
+            if (ranges.length === 0) continue;
+            play({ ...base, key: `${ev.key}:view:${target.path}`, status: "completed", kind: "view", filePath: target.path, text: result.text, ranges });
+          } catch (error) {
+            console.error("[live-view] files.read failed", error);
+          }
+        }
+        const paths = glance.filter((p) => isInside(p, workspaceDir));
+        if (paths.length > 0) play({ ...base, key: `${ev.key}:glance`, status: "completed", kind: "glance", paths });
+      }
+    },
+    [workspaceId, workspaceDir, readRpc, changesRpc, refreshFiles, updatePlayer],
+  );
+
   /** The heart of ingestion: one lane's events, from history (instant) or live (animated). */
   const processEvents = useCallback(
     (laneId: string, events: LiveEvent[], mode: "history" | "live") => {
@@ -295,14 +352,25 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
         // Review mode sees every event; only live ones animate.
         const reviewed = applyToReview(lane().review, ev);
         updateLane(laneId, (l) => ({ ...l, review: reviewed.state, thoughts: interrupt(l.thoughts, ev.agentId) }));
+        // A read review mode already plays (a saved diff, a file at PR head) isn't shown again in Code.
+        let reviewRead = false;
         if (mode === "live") {
           for (const effect of reviewed.effects) {
             if (effect.kind === "switch") continue;
+            reviewRead = true;
             const plan = planFor(reviewed.state, effect);
             chainRef.current = chainRef.current.then(() => updatePlayer(laneId, (s) => enqueueRead(s, effect, plan)));
           }
         }
-        if (ev.kind === "read") continue;
+        if (ev.kind === "read") {
+          // The read itself has nothing to type; Code mode shows it as a view once it finishes.
+          if (mode === "live" && !reviewRead) {
+            chainRef.current = chainRef.current
+              .then(() => followUp(laneId, ev, true))
+              .catch((error) => console.error("[live-view] ingest failed", error));
+          }
+          continue;
+        }
         if (mode === "history") {
           if (history.some((h) => h.key === ev.key)) {
             // A later copy in the same batch (e.g. the call, then the call with its result).
@@ -319,37 +387,41 @@ export function useLiveFeed(workspaceId: string): LiveFeed {
         const isFile = ev.kind === "edit" || ev.kind === "write";
         if (isFile && ev.inWorkspace && !knownPaths.current.has(ev.filePath)) refreshFiles();
 
-        chainRef.current = chainRef.current
-          .then(async () => {
-            // Checked here, in order, so a quick running→completed pair isn't queued twice.
-            if (lane().seen.has(ev.key)) {
-              updatePlayer(laneId, (s) => applyUpdate(s, ev));
-              return;
-            }
-            // Edits and writes play once finished, with the file as it is right after them.
-            if (isFile && ev.status === "running") return;
-            if (isFile && ev.status === "completed") {
-              let afterText: string | null = null;
-              if (ev.inWorkspace) {
-                try {
-                  const result = await readRpc({ workspaceId, path: ev.filePath });
-                  afterText = result.status === "ok" ? result.text : null;
-                } catch (error) {
-                  console.error("[live-view] files.read failed", error);
-                }
+        const playEvent = async () => {
+          // Checked here, in order, so a quick running→completed pair isn't queued twice.
+          if (lane().seen.has(ev.key)) {
+            updatePlayer(laneId, (s) => applyUpdate(s, ev));
+            return;
+          }
+          // Edits and writes play once finished, with the file as it is right after them.
+          if (isFile && ev.status === "running") return;
+          if (isFile && ev.status === "completed") {
+            let afterText: string | null = null;
+            if (ev.inWorkspace) {
+              try {
+                const result = await readRpc({ workspaceId, path: ev.filePath });
+                afterText = result.status === "ok" ? result.text : null;
+              } catch (error) {
+                console.error("[live-view] files.read failed", error);
               }
-              lane().seen.add(ev.key);
-              updatePlayer(laneId, (s) => enqueue(s, { ...ev, afterText }));
-              return;
             }
             lane().seen.add(ev.key);
-            updatePlayer(laneId, (s) => enqueue(s, ev));
+            updatePlayer(laneId, (s) => enqueue(s, { ...ev, afterText }));
+            return;
+          }
+          lane().seen.add(ev.key);
+          updatePlayer(laneId, (s) => enqueue(s, ev));
+        };
+        chainRef.current = chainRef.current
+          .then(async () => {
+            await playEvent();
+            await followUp(laneId, ev, !reviewRead);
           })
           .catch((error) => console.error("[live-view] ingest failed", error));
       }
       if (history.length > 0) updatePlayer(laneId, (s) => seedHistory(s, history));
     },
-    [workspaceId, readRpc, refreshFiles, updateLane, updatePlayer, planFor, onSubagent],
+    [workspaceId, readRpc, refreshFiles, updateLane, updatePlayer, planFor, onSubagent, followUp],
   );
 
   const ingest = useCallback(
